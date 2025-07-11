@@ -28,46 +28,34 @@ deploy_to_server:
   stage: deploy
   image: alpine:latest
 
-  # 在脚本执行前，准备好SSH环境
   before_script:
-    # 1. 安装必要的工具
     - 'apk update && apk add openssh-client rsync'
-    
-    # 2. 启动SSH-Agent用于管理密钥
     - 'eval $(ssh-agent -s)'
-    
-    # 3. 【关键修改】使用文件类型的变量来加载私钥
-    # GitLab会将File类型的变量内容写入一个临时文件，并将其路径存放在同名变量中
-    # 我们需要先给这个私钥文件正确的权限
     - 'chmod 600 "$DEPLOY_KEY_FILE"'
-    # 将这个文件路径所指向的私钥添加到ssh-agent
     - 'ssh-add "$DEPLOY_KEY_FILE"'
-    
-    # 4. 提前获取并信任服务器的主机密钥，防止交互式提问
     - 'mkdir -p ~/.ssh'
     - 'ssh-keyscan -H $SERVER_HOST >> ~/.ssh/known_hosts'
 
-  # 执行部署的主要脚本
   script:
-    - echo "--- Starting Deployment (File-based Key Auth) ---"
+    - echo "--- Starting Full Deployment ---"
     
-    # 1. 部署前端文件 (不再需要sshpass)
+    # 第1步：部署前端文件 (不变)
     - |
       echo "1. Deploying frontend files..."
       rsync -avz --delete frontend/realtime-monitor-fronted/dist/ ${SERVER_USER}@${SERVER_HOST}:/usr/local/nginx/html/
     
-    # 2. 更新后端并重启服务 (不再需要sshpass)
+    # 【关键修改】第2步：不再使用git pull，而是用rsync同步后端代码
     - |
-      echo "2. Updating backend and restarting service..."
+      echo "2. Deploying backend files..."
+      # --exclude '.git' 排除了.git目录，我们只同步代码文件
+      # 注意目标路径是您服务器上后端代码的路径
+      rsync -avz --delete --exclude '.git' backend/ ${SERVER_USER}@${SERVER_HOST}:/root/realtime-video-monitoring-hh/realtime-video-monitoring/backend/
+    
+    # 第3步：仅重启服务
+    - |
+      echo "3. Restarting backend service..."
       ssh ${SERVER_USER}@${SERVER_HOST} "
-        echo '--> Pulling latest backend code...';
-        cd /root/realtime-video-monitoring;
-        git checkout hh_branch;
-        git pull;
-        
-        echo '--> Restarting backend service...';
         sudo systemctl restart video-monitoring-backend.service;
-        
         echo '--> Deployment finished!';
       "
       
