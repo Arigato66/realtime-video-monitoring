@@ -1,12 +1,11 @@
 # 1. 定义整个流水线的“工序”顺序
-# 这里规定了必须先完成所有 build 阶段的任务，才能开始 deploy 阶段的任务
 stages:
   - build
   - deploy
 
 # ----------------------------------------------------------------
 
-# 2. 定义第一个任务，并分配到 build 工序
+# 2. 定义第一个任务：构建前端 (此部分保持不变)
 build_frontend:
   stage: build
   image: node:22
@@ -24,29 +23,43 @@ build_frontend:
 
 # ----------------------------------------------------------------
 
-# 3. 定义第二个任务，并分配到 deploy 工序
-# 您刚才引用的，就是下面这部分代码
+# 3. 定义第二个任务：部署到服务器 (采用最终的文件变量方案)
 deploy_to_server:
   stage: deploy
   image: alpine:latest
 
-  # 在before_script中，我们用ssh-keyscan提前完成主机信任
+  # 在脚本执行前，准备好SSH环境
   before_script:
-    - 'apk update && apk add openssh-client sshpass rsync'
+    # 1. 安装必要的工具
+    - 'apk update && apk add openssh-client rsync'
+    
+    # 2. 启动SSH-Agent用于管理密钥
+    - 'eval $(ssh-agent -s)'
+    
+    # 3. 【关键修改】使用文件类型的变量来加载私钥
+    # GitLab会将File类型的变量内容写入一个临时文件，并将其路径存放在同名变量中
+    # 我们需要先给这个私钥文件正确的权限
+    - 'chmod 600 "$DEPLOY_KEY_FILE"'
+    # 将这个文件路径所指向的私钥添加到ssh-agent
+    - 'ssh-add "$DEPLOY_KEY_FILE"'
+    
+    # 4. 提前获取并信任服务器的主机密钥，防止交互式提问
     - 'mkdir -p ~/.ssh'
-    - 'chmod 700 ~/.ssh'
-    # 【关键修改】使用ssh-keyscan获取服务器的公钥并添加到known_hosts文件中
     - 'ssh-keyscan -H $SERVER_HOST >> ~/.ssh/known_hosts'
 
-  # script部分现在可以非常简洁，无需任何额外的SSH选项
+  # 执行部署的主要脚本
   script:
-    - echo "--- Starting Deployment (ssh-keyscan method) ---"
+    - echo "--- Starting Deployment (File-based Key Auth) ---"
+    
+    # 1. 部署前端文件 (不再需要sshpass)
     - |
       echo "1. Deploying frontend files..."
-      SSHPASS="$SERVER_PASSWORD" rsync -avz --delete frontend/realtime-monitor-fronted/dist/ ${SERVER_USER}@${SERVER_HOST}:/usr/local/nginx/html/
+      rsync -avz --delete frontend/realtime-monitor-fronted/dist/ ${SERVER_USER}@${SERVER_HOST}:/usr/local/nginx/html/
+    
+    # 2. 更新后端并重启服务 (不再需要sshpass)
     - |
       echo "2. Updating backend and restarting service..."
-      SSHPASS="$SERVER_PASSWORD" ssh ${SERVER_USER}@${SERVER_HOST} "
+      ssh ${SERVER_USER}@${SERVER_HOST} "
         echo '--> Pulling latest backend code...';
         cd /root/realtime-video-monitoring-hh/realtime-video-monitoring;
         git checkout hh_branch;
@@ -57,5 +70,6 @@ deploy_to_server:
         
         echo '--> Deployment finished!';
       "
+      
   rules:
     - if: '$CI_COMMIT_BRANCH == "hh_branch"'
