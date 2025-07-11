@@ -1,7 +1,9 @@
+# 定义流水线的各个阶段
 stages:
   - build
   - deploy
 
+# 任务一：构建前端项目 (此部分保持不变，因为它已成功)
 build_frontend:
   stage: build
   image: node:22
@@ -13,47 +15,49 @@ build_frontend:
   artifacts:
     paths:
       - frontend/realtime-monitor-fronted/dist/
-  # 【关键修改】使用rules来定义规则
   rules:
     # 仅当代码被推送到 hh_branch 分支时，才执行此任务
     - if: '$CI_COMMIT_BRANCH == "hh_branch"'
 
+# 任务二：部署到云服务器 (采用全新的sshpass方案)
 deploy_to_server:
   stage: deploy
   image: alpine:latest
+
+  # 【关键修改】before_script部分被大大简化
   before_script:
-    - 'sed -i "s/dl-cdn.alpinelinux.org/mirrors.tuna.tsinghua.edu.cn/g" /etc/apk/repositories'
-    - 'apk update && apk add openssh-client rsync'
-    - 'eval $(ssh-agent -s)'
-    - 'echo "$DEPLOY_KEY" | base64 -d | ssh-add -'
-    - 'mkdir -p ~/.ssh && chmod 700 ~/.ssh'
-    - 'echo "Host * StrictHostKeyChecking no" >> ~/.ssh/config'
+    # 我们不再需要复杂的ssh-agent设置，只需要安装sshpass和rsync
+    - 'apk update && apk add sshpass rsync'
+
+  # 【关键修改】script部分完全重写，使用sshpass进行认证
   script:
-    - echo "--- Deploying hh_branch to server ---"
-    # 1. 同步服务器上的代码库 (让后端代码保持最新)
+    - echo "--- Starting Deployment using sshpass ---"
+    
+    # 1. 使用 sshpass 和 rsync 来部署前端文件
     - |
-      ssh ${SERVER_USER}@${SERVER_HOST} "
-        echo '1. Pulling latest code...';
-        # 【请修改】确保路径正确
+      echo "1. Deploying frontend files..."
+      # 使用SSHPASS环境变量将密码传递给rsync
+      # 请确保/usr/local/nginx/html/是您服务器上正确的Nginx网站根目录
+      SSHPASS="$SERVER_PASSWORD" rsync -avz --delete frontend/realtime-monitor-fronted/dist/ ${SERVER_USER}@${SERVER_HOST}:/usr/local/nginx/html/
+    
+    # 2. 使用 sshpass 和 ssh 来执行远程命令，更新后端并重启服务
+    - |
+      echo "2. Updating backend and restarting service..."
+      # 使用SSHPASS环境变量将密码传递给ssh
+      SSHPASS="$SERVER_PASSWORD" ssh ${SERVER_USER}@${SERVER_HOST} "
+        echo '--> Pulling latest backend code...';
+        # 请确保/root/realtime-video-monitoring是您服务器上正确的项目根目录
         cd /root/realtime-video-monitoring;
-        # 切换到您的分支并拉取最新代码
         git checkout hh_branch;
         git pull;
-      "
-    # 2. 将构建好的前端dist文件夹同步到服务器的Nginx网站根目录
-    - |
-      echo "2. Deploying frontend files..."
-      # 【请修改】确保Nginx网站根目录正确
-      rsync -avz --delete frontend/realtime-monitor-fronted/dist/ ${SERVER_USER}@${SERVER_HOST}:/usr/local/nginx/html/
-    # 3. 重启后端服务
-    - |
-      echo "3. Restarting backend service..."
-      ssh ${SERVER_USER}@${SERVER_HOST} "
-        # 【请修改】使用您在服务器上配置好的真实服务名
+        
+        echo '--> Restarting backend service...';
+        # 请确保video-monitoring-backend.service是您在服务器上配置好的真实服务名
         sudo systemctl restart video-monitoring-backend.service;
+        
+        echo '--> Deployment finished!';
       "
-    - echo "--- Deployment Finished ---"
-  # 【关键修改】使用rules来定义规则
+  
   rules:
     # 仅当代码被推送到 hh_branch 分支时，才执行此任务
     - if: '$CI_COMMIT_BRANCH == "hh_branch"'
