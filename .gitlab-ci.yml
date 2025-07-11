@@ -61,7 +61,7 @@ deploy_to_server:
       echo "2. Updating backend and restarting service..."
       ssh ${SERVER_USER}@${SERVER_HOST} "
         echo '--> Pulling latest backend code...';
-        cd /root/realtime-video-monitoring-hh/realtime-video-monitoring;
+        cd /root/realtime-video-monitoring;
         git checkout hh_branch;
         git pull;
         
