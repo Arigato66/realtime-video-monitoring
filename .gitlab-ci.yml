@@ -1,62 +1,37 @@
-# 定义流水线的各个阶段
-stages:
-  - build
-  - deploy
-
-# 任务一：构建前端项目 (此部分保持不变，因为它已成功)
-build_frontend:
-  stage: build
-  image: node:22
-  script:
-    - echo "--- Building frontend for hh_branch ---"
-    - cd frontend/realtime-monitor-fronted
-    - npm install
-    - npm run build
-  artifacts:
-    paths:
-      - frontend/realtime-monitor-fronted/dist/
-  rules:
-    # 仅当代码被推送到 hh_branch 分支时，才执行此任务
-    - if: '$CI_COMMIT_BRANCH == "hh_branch"'
-
-# 任务二：部署到云服务器 (采用全新的sshpass方案)
 deploy_to_server:
   stage: deploy
   image: alpine:latest
 
-  # 【关键修改】before_script部分被大大简化
+  # 【关键修改】我们在安装工具后，增加创建SSH配置文件的步骤
   before_script:
-    # 我们不再需要复杂的ssh-agent设置，只需要安装sshpass和rsync
     - 'apk update && apk add openssh-client sshpass rsync'
-  # 【关键修改】script部分完全重写，使用sshpass进行认证
+    # 创建.ssh目录并设置正确的权限
+    - 'mkdir -p ~/.ssh'
+    - 'chmod 700 ~/.ssh'
+    # 创建一个临时的SSH配置文件，并写入一行规则：对所有主机(*)都禁用严格的主机密钥检查
+    - 'echo "Host * StrictHostKeyChecking no" > ~/.ssh/config'
+
   script:
     - echo "--- Starting Deployment using sshpass ---"
     
-    # 1. 使用 sshpass 和 rsync 来部署前端文件
+    # 1. 部署前端文件。现在不再需要在命令里加 -o StrictHostKeyChecking=no
     - |
       echo "1. Deploying frontend files..."
-      # 使用SSHPASS环境变量将密码传递给rsync
-      # 请确保/usr/local/nginx/html/是您服务器上正确的Nginx网站根目录
       SSHPASS="$SERVER_PASSWORD" rsync -avz --delete frontend/realtime-monitor-fronted/dist/ ${SERVER_USER}@${SERVER_HOST}:/usr/local/nginx/html/
     
-    # 2. 使用 sshpass 和 ssh 来执行远程命令，更新后端并重启服务
+    # 2. 更新后端并重启服务。现在也不再需要在命令里加 -o StrictHostKeyChecking=no
     - |
       echo "2. Updating backend and restarting service..."
-      # 使用SSHPASS环境变量将密码传递给ssh
       SSHPASS="$SERVER_PASSWORD" ssh ${SERVER_USER}@${SERVER_HOST} "
         echo '--> Pulling latest backend code...';
-        # 请确保/root/realtime-video-monitoring是您服务器上正确的项目根目录
-        cd /root/realtime-video-monitoring;
+        cd /root/realtime-video-monitoring-hh/realtime-video-monitoring;
         git checkout hh_branch;
         git pull;
         
         echo '--> Restarting backend service...';
-        # 请确保video-monitoring-backend.service是您在服务器上配置好的真实服务名
         sudo systemctl restart video-monitoring-backend.service;
         
         echo '--> Deployment finished!';
       "
-  
   rules:
-    # 仅当代码被推送到 hh_branch 分支时，才执行此任务
     - if: '$CI_COMMIT_BRANCH == "hh_branch"'
