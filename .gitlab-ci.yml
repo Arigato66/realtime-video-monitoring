@@ -4,7 +4,7 @@ stages:
 
 build_frontend:
   stage: build
-  image: node:16
+  image: node:22
   script:
     - echo "--- Building frontend for hh_branch ---"
     - cd frontend/realtime-monitor-fronted
