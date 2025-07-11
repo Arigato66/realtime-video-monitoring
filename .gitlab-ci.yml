@@ -49,7 +49,7 @@ deploy_to_server:
       echo "2. Deploying backend files..."
       # --exclude '.git' 排除了.git目录，我们只同步代码文件
       # 注意目标路径是您服务器上后端代码的路径
-      rsync -avz --delete --exclude '.git' backend/ ${SERVER_USER}@${SERVER_HOST}:/root/realtime-video-monitoring-hh/realtime-video-monitoring/backend/
+      rsync -avz --delete --exclude '.git' backend/ ${SERVER_USER}@${SERVER_HOST}:/root/realtime-video-monitoring/backend/
     
     # 第3步：仅重启服务
     - |
