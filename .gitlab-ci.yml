@@ -27,8 +27,7 @@ deploy_to_server:
   # 【关键修改】before_script部分被大大简化
   before_script:
     # 我们不再需要复杂的ssh-agent设置，只需要安装sshpass和rsync
-    - 'apk update && apk add sshpass rsync'
-
+    - 'apk update && apk add openssh-client sshpass rsync'
   # 【关键修改】script部分完全重写，使用sshpass进行认证
   script:
     - echo "--- Starting Deployment using sshpass ---"
