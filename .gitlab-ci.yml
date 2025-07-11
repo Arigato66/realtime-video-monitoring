@@ -28,11 +28,32 @@ build_frontend:
 deploy_to_server:
   stage: deploy
   image: alpine:latest
+
   before_script:
     - 'apk update && apk add openssh-client sshpass rsync'
     - 'mkdir -p ~/.ssh && chmod 700 ~/.ssh'
     - 'echo "Host * StrictHostKeyChecking no" > ~/.ssh/config'
-  script:
-    - # ...部署脚本...
+
+  # 【关键修改】我们将整个script部分作为一个统一的多行字符串
+  # 注意 script: 后面的 | 符号，以及后续命令不再使用 - 开头
+  script: |
+    echo "--- Starting Deployment using sshpass ---"
+    
+    echo "1. Deploying frontend files..."
+    SSHPASS="$SERVER_PASSWORD" rsync -avz --delete frontend/realtime-monitor-fronted/dist/ ${SERVER_USER}@${SERVER_HOST}:/usr/local/nginx/html/
+    
+    echo "2. Updating backend and restarting service..."
+    SSHPASS="$SERVER_PASSWORD" ssh ${SERVER_USER}@${SERVER_HOST} "
+      echo '--> Pulling latest backend code...';
+      cd /root/realtime-video-monitoring-hh/realtime-video-monitoring;
+      git checkout hh_branch;
+      git pull;
+      
+      echo '--> Restarting backend service...';
+      sudo systemctl restart video-monitoring-backend.service;
+      
+      echo '--> Deployment finished!';
+    "
+    
   rules:
     - if: '$CI_COMMIT_BRANCH == "hh_branch"'
