@@ -1,37 +1,38 @@
+# 1. 定义整个流水线的“工序”顺序
+# 这里规定了必须先完成所有 build 阶段的任务，才能开始 deploy 阶段的任务
+stages:
+  - build
+  - deploy
+
+# ----------------------------------------------------------------
+
+# 2. 定义第一个任务，并分配到 build 工序
+build_frontend:
+  stage: build
+  image: node:22
+  script:
+    - echo "--- Building frontend ---"
+    - cd frontend/realtime-monitor-fronted
+    - npm install
+    - npm run build
+  artifacts:
+    paths:
+      - frontend/realtime-monitor-fronted/dist/
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "hh_branch"'
+
+# ----------------------------------------------------------------
+
+# 3. 定义第二个任务，并分配到 deploy 工序
+# 您刚才引用的，就是下面这部分代码
 deploy_to_server:
   stage: deploy
   image: alpine:latest
-
-  # 【关键修改】我们在安装工具后，增加创建SSH配置文件的步骤
   before_script:
     - 'apk update && apk add openssh-client sshpass rsync'
-    # 创建.ssh目录并设置正确的权限
-    - 'mkdir -p ~/.ssh'
-    - 'chmod 700 ~/.ssh'
-    # 创建一个临时的SSH配置文件，并写入一行规则：对所有主机(*)都禁用严格的主机密钥检查
+    - 'mkdir -p ~/.ssh && chmod 700 ~/.ssh'
     - 'echo "Host * StrictHostKeyChecking no" > ~/.ssh/config'
-
   script:
-    - echo "--- Starting Deployment using sshpass ---"
-    
-    # 1. 部署前端文件。现在不再需要在命令里加 -o StrictHostKeyChecking=no
-    - |
-      echo "1. Deploying frontend files..."
-      SSHPASS="$SERVER_PASSWORD" rsync -avz --delete frontend/realtime-monitor-fronted/dist/ ${SERVER_USER}@${SERVER_HOST}:/usr/local/nginx/html/
-    
-    # 2. 更新后端并重启服务。现在也不再需要在命令里加 -o StrictHostKeyChecking=no
-    - |
-      echo "2. Updating backend and restarting service..."
-      SSHPASS="$SERVER_PASSWORD" ssh ${SERVER_USER}@${SERVER_HOST} "
-        echo '--> Pulling latest backend code...';
-        cd /root/realtime-video-monitoring-hh/realtime-video-monitoring;
-        git checkout hh_branch;
-        git pull;
-        
-        echo '--> Restarting backend service...';
-        sudo systemctl restart video-monitoring-backend.service;
-        
-        echo '--> Deployment finished!';
-      "
+    - # ...部署脚本...
   rules:
     - if: '$CI_COMMIT_BRANCH == "hh_branch"'
