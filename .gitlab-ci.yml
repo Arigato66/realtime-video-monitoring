@@ -1,54 +1,58 @@
-# 定义流水线的各个阶段，我们这里只有一个部署阶段
 stages:
+  - build
   - deploy
 
-# 定义一个名为“部署到服务器”的任务
-deploy_to_server:
-  # 指定该任务属于 deploy 阶段
-  stage: deploy
-
-  # 使用一个轻量的、包含基础工具的Docker镜像作为机器人的运行环境
-  image: alpine:latest
-
-  # 在执行主要脚本前，机器人需要先准备好它的SSH工具
-  before_script:
-    - 'echo "--- Preparing SSH ---"'
-    # 在Docker容器中安装ssh客户端
-    - 'apk update && apk add openssh-client'
-    # 启动ssh-agent以管理密钥
-    - 'eval $(ssh-agent -s)'
-    # 将我们存储在CI/CD变量中的私钥添加到ssh-agent中
-    # 'tr'命令用于处理Windows复制粘贴时可能产生的换行问题
-    - 'echo "$DEPLOY_KEY" | tr -d "\r" | ssh-add -'
-    # 创建.ssh目录并设置正确的权限
-    - 'mkdir -p ~/.ssh'
-    - 'chmod 700 ~/.ssh'
-    # 【关键】禁用严格的主机密钥检查，防止流水线因“是否信任此主机”的提问而卡住
-    - 'echo "Host * StrictHostKeyChecking no" >> ~/.ssh/config'
-
-  # 这是机器人需要执行的主要脚本
+build_frontend:
+  stage: build
+  image: node:16
   script:
-    - echo "--- Starting Deployment ---"
-    # 通过SSH连接到您的云服务器，并执行一系列命令
+    - echo "--- Building frontend for hh_branch ---"
+    - cd frontend/realtime-monitor-fronted
+    - npm install
+    - npm run build
+  artifacts:
+    paths:
+      - frontend/realtime-monitor-fronted/dist/
+  # 【关键修改】使用rules来定义规则
+  rules:
+    # 仅当代码被推送到 hh_branch 分支时，才执行此任务
+    - if: '$CI_COMMIT_BRANCH == "hh_branch"'
+
+deploy_to_server:
+  stage: deploy
+  image: alpine:latest
+  before_script:
+    - 'apk update && apk add openssh-client rsync'
+    - 'eval $(ssh-agent -s)'
+    - 'echo "$DEPLOY_KEY" | tr -d "\r" | ssh-add -'
+    - 'mkdir -p ~/.ssh && chmod 700 ~/.ssh'
+    - 'echo "Host * StrictHostKeyChecking no" >> ~/.ssh/config'
+  script:
+    - echo "--- Deploying hh_branch to server ---"
+    # 1. 同步服务器上的代码库 (让后端代码保持最新)
     - |
       ssh ${SERVER_USER}@${SERVER_HOST} "
-        echo '1. Successfully connected to server!';
-
-        echo '2. Navigating to project directory...';
-        # 【请修改】将此路径替换为您在服务器上的真实项目路径
-        cd /root/realtime-video-monitoring-hh/realtime-video-monitoring; 
-
-        echo '3. Pulling latest code from GitLab...';
+        echo '1. Pulling latest code...';
+        # 【请修改】确保路径正确
+        cd /root/realtime-video-monitoring;
+        # 切换到您的分支并拉取最新代码
+        git checkout hh_branch;
         git pull;
-
-        echo '4. Restarting backend services...';
+      "
+    # 2. 将构建好的前端dist文件夹同步到服务器的Nginx网站根目录
+    - |
+      echo "2. Deploying frontend files..."
+      # 【请修改】确保Nginx网站根目录正确
+      rsync -avz --delete frontend/realtime-monitor-fronted/dist/ ${SERVER_USER}@${SERVER_HOST}:/usr/local/nginx/html/
+    # 3. 重启后端服务
+    - |
+      echo "3. Restarting backend service..."
+      ssh ${SERVER_USER}@${SERVER_HOST} "
         # 【请修改】使用您在服务器上配置好的真实服务名
         sudo systemctl restart video-monitoring-backend.service;
-        # 如果Nginx配置有变动，也需要重启，否则可以注释掉这行
-        # sudo systemctl restart nginx.service;
-
-        echo '5. Deployment finished successfully!';
       "
-  # 限制：这个任务只在代码被推送到 main 分支时运行
-  only:
-    - main
+    - echo "--- Deployment Finished ---"
+  # 【关键修改】使用rules来定义规则
+  rules:
+    # 仅当代码被推送到 hh_branch 分支时，才执行此任务
+    - if: '$CI_COMMIT_BRANCH == "hh_branch"'
