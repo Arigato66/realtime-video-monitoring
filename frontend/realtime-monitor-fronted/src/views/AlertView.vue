@@ -79,8 +79,8 @@ import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 
 // API端点设置
-const SERVER_ROOT_URL = 'http://localhost:5000';
-const API_BASE_URL = `${SERVER_ROOT_URL}/api`;
+// 使用相对路径替代硬编码的服务器地址
+const API_BASE_URL = '/api';
 
 // 状态变量
 const alerts = ref([]);

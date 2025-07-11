@@ -92,8 +92,8 @@ interface Device {
 }
 
 // API端点设置
-const SERVER_ROOT_URL = 'http://localhost:5000';
-const API_BASE_URL = `${SERVER_ROOT_URL}/api`;
+// 使用相对路径替代硬编码的服务器地址
+const API_BASE_URL = '/api';
 
 // 状态变量（指定类型为Device数组）
 const devices = ref<Device[]>([]);

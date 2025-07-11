@@ -7,6 +7,15 @@ def main():
     # 解决 "OMP: Error #15" 警告
     os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
     
+    try:
+        import cv2
+        if not hasattr(cv2, 'setNumThreads'):
+            cv2.setNumThreads = lambda x: None
+        cv2.setNumThreads(0)
+    except Exception:
+        pass
+    
+    import ultralytics
     parser = argparse.ArgumentParser(description="Flask API exposing YOLOv8 models")
     parser.add_argument("--port", default=5000, type=int, help="port number")
     parser.add_argument("--host", default="0.0.0.0", help="host address")
@@ -23,4 +32,4 @@ def main():
     app.run(host=args.host, port=args.port, debug=True, use_reloader=False)
 
 if __name__ == "__main__":
-    main() 
+    main()
