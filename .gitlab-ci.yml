@@ -1,0 +1,54 @@
+# 定义流水线的各个阶段，我们这里只有一个部署阶段
+stages:
+  - deploy
+
+# 定义一个名为“部署到服务器”的任务
+deploy_to_server:
+  # 指定该任务属于 deploy 阶段
+  stage: deploy
+
+  # 使用一个轻量的、包含基础工具的Docker镜像作为机器人的运行环境
+  image: alpine:latest
+
+  # 在执行主要脚本前，机器人需要先准备好它的SSH工具
+  before_script:
+    - 'echo "--- Preparing SSH ---"'
+    # 在Docker容器中安装ssh客户端
+    - 'apk update && apk add openssh-client'
+    # 启动ssh-agent以管理密钥
+    - 'eval $(ssh-agent -s)'
+    # 将我们存储在CI/CD变量中的私钥添加到ssh-agent中
+    # 'tr'命令用于处理Windows复制粘贴时可能产生的换行问题
+    - 'echo "$DEPLOY_KEY" | tr -d "\r" | ssh-add -'
+    # 创建.ssh目录并设置正确的权限
+    - 'mkdir -p ~/.ssh'
+    - 'chmod 700 ~/.ssh'
+    # 【关键】禁用严格的主机密钥检查，防止流水线因“是否信任此主机”的提问而卡住
+    - 'echo "Host * StrictHostKeyChecking no" >> ~/.ssh/config'
+
+  # 这是机器人需要执行的主要脚本
+  script:
+    - echo "--- Starting Deployment ---"
+    # 通过SSH连接到您的云服务器，并执行一系列命令
+    - |
+      ssh ${SERVER_USER}@${SERVER_HOST} "
+        echo '1. Successfully connected to server!';
+
+        echo '2. Navigating to project directory...';
+        # 【请修改】将此路径替换为您在服务器上的真实项目路径
+        cd /root/realtime-video-monitoring-hh/realtime-video-monitoring; 
+
+        echo '3. Pulling latest code from GitLab...';
+        git pull;
+
+        echo '4. Restarting backend services...';
+        # 【请修改】使用您在服务器上配置好的真实服务名
+        sudo systemctl restart video-monitoring-backend.service;
+        # 如果Nginx配置有变动，也需要重启，否则可以注释掉这行
+        # sudo systemctl restart nginx.service;
+
+        echo '5. Deployment finished successfully!';
+      "
+  # 限制：这个任务只在代码被推送到 main 分支时运行
+  only:
+    - main
