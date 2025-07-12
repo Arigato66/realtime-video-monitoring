@@ -63,6 +63,12 @@ def video_feed():
                 # 在绘制的帧上应用我们的自定义检测逻辑
                 detection_service.process_detection_results(outputs, processed_frame, time_diff, frame_count)
             
+            elif system_state.DETECTION_MODE == 'fall_detection':
+                # 新增：处理跌倒检测模式
+                pose_model = detection_service.get_pose_model() # 获取姿态估计模型
+                pose_results = pose_model.track(processed_frame, persist=True)
+                detection_service.process_pose_estimation_results(pose_results, processed_frame, time_diff, frame_count)
+
             elif system_state.DETECTION_MODE == 'face_only':
                 # 确保已初始化人脸模式的状态字典和模型
                 if 'face_model' not in face_recognition_cache:
