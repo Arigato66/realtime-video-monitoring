@@ -3,20 +3,20 @@ chcp 65001 > nul
 echo 实时视频监控系统启动脚本
 echo ====================================
 
-:: 启动后端
-echo 正在激活conda环境...
-echo 正在启动后端服务...
-cd %~dp0
-start cmd /k "chcp 65001 > nul && call conda activate video && cd %~dp0\backend && python run.py --host 0.0.0.0 --port 5000"
+:: 启动后端API服务
+call conda init
+call conda activate video_monitor || (
+    echo 错误: 无法激活 conda 环境 "video_monitor"
+    pause
+    exit /b 1
+)
+start "后端API服务" cmd /k "cd backend && python run.py --port 5000"
 
-:: 等待后端启动
-echo 等待后端启动 (5秒)...
-timeout /t 5 /nobreak > nul
 
 :: 启动前端
 echo 正在启动前端服务...
-cd %~dp0\frontend\realtime-monitor-fronted
-start cmd /k "chcp 65001 > nul && cd %~dp0\frontend\realtime-monitor-fronted && npm run dev"
+cd frontend\realtime-monitor-fronted
+start "前端服务" cmd /k "npm run dev"
 
 echo ====================================
 echo 服务已启动:
