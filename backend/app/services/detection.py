@@ -24,6 +24,7 @@ MODEL_DIR = os.path.join(BASE_PATH, 'yolo-Weights') # 统一存放在 yolo-Weigh
 
 POSE_MODEL_PATH = os.path.join(MODEL_DIR, "yolov8s-pose.pt")
 OBJECT_MODEL_PATH = os.path.join(MODEL_DIR, "yolov8n.pt")
+
 FACE_MODEL_PATH = os.path.join(MODEL_DIR, "yolov8n-face-lindevs.pt")
 
 
@@ -649,4 +650,4 @@ def draw_distance_line(frame, foot_point, distance):
                     end_point = start_point + 5 * unit_vector
                     start_point = tuple(map(int, start_point))
                     end_point = tuple(map(int, end_point))
-                    cv2.line(frame, start_point, end_point, (0, 0, 255), line_thickness + 1) 
+                    cv2.line(frame, start_point, end_point, (0, 0, 255), line_thickness + 1)

@@ -73,6 +73,32 @@ class RTMPStreamManager:
                 # 使用OpenCV连接RTMP流
                 cap = cv2.VideoCapture(url)
                 
+                # 检查是否成功打开
+                if not cap.isOpened():
+                    results.append({'index': i, 'connected': False, 'error': 'Failed to open video capture'})
+                    print(f"流 {i} 连接失败: 无法打开视频捕获")
+                    continue
+                
+                # 设置超时参数
+                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)
+                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                
+                # 尝试读取一帧来验证连接
+                ret, frame = cap.read()
+                
+                if not ret or frame is None:
+                    cap.release()
+                    results.append({'index': i, 'connected': False, 'error': 'Stream opened but failed to read frame - possibly invalid stream'})
+                    print(f"流 {i} 连接失败: 流已打开但无法读取帧 - 可能是无效流")
+                    continue
+                
+                print(f"流 {i} 成功读取帧，尺寸: {frame.shape}")
+                
+                # 设置连接超时（毫秒）
+                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)  # 10秒超时
+                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)   # 5秒读取超时
+                
                 # 设置缓冲区大小，减少延迟
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 
@@ -110,7 +136,7 @@ class RTMPStreamManager:
                 
             except Exception as e:
                 error_msg = str(e)
-                results.append({'index': i, 'connected': False, 'error': error_msg})
+                results.append({'index': i, 'connected': False, 'error': f'Connection exception: {error_msg}'})
                 print(f"流 {i} 连接异常: {url}, 错误: {error_msg}")
         
         self.active = any(r['connected'] for r in results)
@@ -151,6 +177,11 @@ class RTMPStreamManager:
                 
                 # 更新帧计数
                 self.frame_counts[stream_index] += 1
+                frame_count = self.frame_counts[stream_index]
+                
+                # 添加详细的帧处理日志
+                if frame_count % 30 == 0:  # 每30帧输出一次日志
+                    print(f"流 {stream_index} 正在处理第 {frame_count} 帧，帧大小: {frame.shape}")
                 
                 # 处理帧（包含检测逻辑）
                 processed_frame = self._process_frame(frame, stream_index)
@@ -184,7 +215,7 @@ class RTMPStreamManager:
             print(f"流 {stream_index} 释放OpenCV资源时出错: {e}")
         
         print(f"流 {stream_index} 清理完成")
-    
+
     def _process_frame(self, frame, stream_index: int):
         """处理单个流的帧，包含完整的检测逻辑"""
         try:
@@ -245,6 +276,10 @@ class RTMPStreamManager:
             # 添加帧计数信息
             cv2.putText(processed_frame, f'Frame: {frame_count}', 
                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # 添加帧处理完成日志
+            if frame_count % 120 == 0:  # 每120帧输出一次处理完成日志
+                print(f"流 {stream_index} 帧 {frame_count} 处理完成")
             
             return processed_frame
             

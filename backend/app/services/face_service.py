@@ -5,8 +5,9 @@ import json
 from datetime import datetime
 import numpy as np
 from deepface import DeepFace
-import mysql.connector
-from app.config import Config 
+from app import db
+from app.models.passenger import Passenger
+from sqlalchemy import text
 
 # --- 全局路径和模型配置 ---
 
@@ -30,20 +31,13 @@ def _ensure_data_dirs_exist():
     os.makedirs(FACES_DIR, exist_ok=True)
 
 def _get_db_connection():
-    """获取数据库连接"""
+    """测试SQLAlchemy数据库连接"""
     try:
-        conn = mysql.connector.connect(
-            host=Config.MYSQL_HOST,
-            user=Config.MYSQL_USER,
-            password=Config.MYSQL_PASSWORD,
-            database=Config.MYSQL_DB,
-            # 增加超时设置
-            connect_timeout=10
-        )
-        return conn
-    except mysql.connector.Error as err:
+        db.session.execute(text('SELECT 1'))
+        return True
+    except Exception as err:
         print(f"数据库连接失败: {err}")
-        return None
+        return False
 
 def preload_deepface_model():
     """
@@ -61,77 +55,66 @@ def preload_deepface_model():
 # --- 核心人脸服务函数 ---
 
 def register_new_face(image_path, name):
-    """
-    使用DeepFace从图像文件注册新的人脸。
-    
-    参数:
-        image_path (str): 上传的临时图像文件的路径。
-        name (str): 人员的姓名。
-        
-    返回:
-        dict: 表示成功或失败的字典。
-    """
-    conn = _get_db_connection()
-    if not conn:
+    """使用SQLAlchemy注册新的人脸"""
+    if not _get_db_connection():
         return {"status": "error", "message": "数据库连接失败。"}
-
-    cursor = conn.cursor()
 
     try:
         # 1. 检查姓名是否已在数据库中注册
-        cursor.execute("SELECT passenger_id FROM passengers WHERE name = %s", (name,))
-        if cursor.fetchone():
+        existing_passenger = Passenger.query.filter_by(name=name).first()
+        if existing_passenger:
             return {"status": "error", "message": f"'{name}' 已被注册。"}
 
         # 2. 使用DeepFace验证图像
         try:
-            # extract_faces 会验证图像中是否有人脸，并进行裁剪和对齐
             face_objects = DeepFace.extract_faces(
                 img_path=image_path, 
-                enforce_detection=True, # 强制要求检测到人脸
-                detector_backend='retinaface' # 使用更高精度的检测器
+                enforce_detection=True,
+                detector_backend='retinaface'
             )
             if len(face_objects) > 1:
                 return {"status": "error", "message": "在图像中找到多个人脸。请使用只有单一人脸的照片。"}
         except ValueError as e:
-            # 如果DeepFace未找到人脸，会抛出ValueError
             return {"status": "error", "message": f"在图像中未找到人脸或图像质量不佳: {e}"}
 
         # 3. 保存图像文件到永久存储
         person_dir = os.path.join(FACES_DIR, name)
         os.makedirs(person_dir, exist_ok=True)
         
-        # 将图片保存为 jpg 格式以保持一致性
         new_image_filename = f"{uuid.uuid4()}.jpg"
         permanent_image_path = os.path.join(person_dir, new_image_filename)
         shutil.copy(image_path, permanent_image_path)
         
-        # 4. 在数据库中创建记录 (不直接存储特征向量)
-        passenger_id = str(uuid.uuid4())
-        insert_sql = """
-        INSERT INTO passengers (
-            passenger_id, name, registration_time, blacklist_flag, last_updated, image_path
-        ) VALUES (%s, %s, %s, %s, %s, %s)
-        """
-        cursor.execute(insert_sql, (
-            passenger_id, name, datetime.now(), False, datetime.now(), permanent_image_path
-        ))
-        conn.commit()
+        # 4. 在数据库中创建记录
+        new_passenger = Passenger(
+            name=name,
+            registration_time=datetime.now(),
+            blacklist_flag=False,
+            image_path=permanent_image_path
+        )
+        
+        db.session.add(new_passenger)
+        db.session.commit()
     
-        # 5. 清理DeepFace的数据库缓存，强制重新索引
+        # 5. 清理DeepFace的数据库缓存
         db_path = os.path.join(FACES_DIR, "representations_arcface.pkl")
         if os.path.exists(db_path):
             os.remove(db_path)
     
         return {"status": "success", "message": f"'{name}' 的人脸已成功注册。"}
 
-    except mysql.connector.Error as err:
-        conn.rollback() # 出错时回滚
-        return {"status": "error", "message": f"数据库操作失败: {err}"}
-    finally:
-        if conn and conn.is_connected():
-            cursor.close()
-            conn.close()
+    except Exception as err:
+        db.session.rollback()
+        return {"status": "error", "message": f"操作失败: {err}"}
+
+def get_all_registered_names():
+    """获取所有已注册的人员姓名"""
+    try:
+        passengers = Passenger.query.all()
+        return [passenger.name for passenger in passengers]
+    except Exception as e:
+        print(f"获取注册人员列表失败: {e}")
+        return []
 
 def identify_face_from_image(unknown_image_array):
     """
@@ -200,69 +183,43 @@ def identify_face_from_image(unknown_image_array):
     return "Stranger", None
 
 
-def get_all_registered_names():
-    """从数据库返回所有已注册姓名的列表"""
-    conn = _get_db_connection()
-    if not conn:
-        return []
-    
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM passengers ORDER BY name")
-        names = [row[0] for row in cursor.fetchall()]
-        return names
-    except mysql.connector.Error as err:
-        print(f"从数据库获取姓名列表失败: {err}")
-        return []
-    finally:
-        if conn and conn.is_connected():
-            cursor.close()
-            conn.close()
-   
-
 def delete_face(name):
     """
     按姓名删除已注册的人脸（包括图片文件和数据库记录）。
     """
-    conn = _get_db_connection()
-    if not conn:
+    if not _get_db_connection():
         return False
         
     try:
-        cursor = conn.cursor()
-        
-        # 1. 从数据库删除记录
-        cursor.execute("DELETE FROM passengers WHERE name = %s", (name,))
-        if cursor.rowcount == 0:
-            # 如果数据库中没有这个人，直接返回
+        # 1. 查找要删除的乘客记录
+        passenger = Passenger.query.filter_by(name=name).first()
+        if not passenger:
             return False
         
-        conn.commit()
+        # 2. 从数据库删除记录
+        db.session.delete(passenger)
+        db.session.commit()
 
-        # 2. 从文件系统删除对应的图片目录
+        # 3. 从文件系统删除对应的图片目录
         person_dir = os.path.join(FACES_DIR, name)
         if os.path.exists(person_dir):
             shutil.rmtree(person_dir)
             
-        # 3. 清理DeepFace的数据库缓存，强制重新索引
+        # 4. 清理DeepFace的数据库缓存，强制重新索引
         db_path = os.path.join(FACES_DIR, "representations_arcface.pkl")
         if os.path.exists(db_path):
             os.remove(db_path)
             
         return True
         
-    except (mysql.connector.Error, OSError) as err:
+    except Exception as err:
         print(f"删除人脸 '{name}' 失败: {err}")
-        # 如果出错，可能需要手动回滚或处理
+        db.session.rollback()
         return False
-    finally:
-        if conn and conn.is_connected():
-            cursor.close()
-            conn.close()
 
 # --- 应用启动时执行 ---
 
 # 确保目录存在
 _ensure_data_dirs_exist()
 # 预加载模型，避免首次请求延迟
-preload_deepface_model() 
+preload_deepface_model()

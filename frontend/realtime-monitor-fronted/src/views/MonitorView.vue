@@ -87,6 +87,8 @@
             <button @click="connectWebcam" :class="{ active: activeSource === 'webcam' }">开启摄像头</button>
             <button @click="disconnectWebcam" v-if="activeSource === 'webcam'" class="disconnect-button">关闭摄像头</button>
             <button @click="uploadVideoFile" :disabled="activeSource === 'webcam'">上传视频</button>
+            <button @click="showRtmpConfigDialog" :class="{ active: activeSource === 'rtmp' }">多RTMP流</button>
+            <button @click="disconnectAllRtmpStreams" v-if="activeSource === 'rtmp'" class="disconnect-button">断开RTMP</button>
           </div>
           <!-- The hidden file input is no longer needed here -->
         </div>
@@ -180,6 +182,37 @@
       </main>
     </div>
   </div>
+  
+  <!-- RTMP配置弹窗 -->
+  <div v-if="showRtmpConfig" class="rtmp-config-overlay" @click.self="showRtmpConfig = false">
+    <div class="rtmp-config-dialog">
+      <h3>配置RTMP流</h3>
+      <div class="rtmp-url-list">
+        <div v-for="(url, index) in rtmpUrls" :key="index" class="rtmp-url-item">
+          <input 
+            v-model="rtmpUrls[index]" 
+            type="text" 
+            :placeholder="`RTMP流地址 ${index + 1}`"
+            class="rtmp-url-input"
+          />
+          <button 
+            @click="removeRtmpUrl(index)" 
+            :disabled="rtmpUrls.length <= 1"
+            class="remove-url-btn"
+          >
+            删除
+          </button>
+        </div>
+      </div>
+      <div class="rtmp-config-actions">
+        <button @click="addRtmpUrl" class="add-url-btn">添加流地址</button>
+        <div class="dialog-buttons">
+          <button @click="showRtmpConfig = false" class="cancel-btn">取消</button>
+          <button @click="connectAllRtmpStreams" class="connect-btn">连接所有流</button>
+        </div>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup>
@@ -207,6 +240,16 @@ const faceFileInput = ref(null) // 用于人脸注册的文件输入
 const registeredUsers = ref([]) // 已注册用户列表
 const pollingIntervalId = ref(null) // 用于轮询的定时器ID
 const videoTaskId = ref(''); // 保存当前视频处理任务的ID
+
+// RTMP流相关变量
+const rtmpStreams = ref([]) // RTMP流列表
+const rtmpConnected = ref(false) // RTMP连接状态
+const rtmpUrls = ref(['']) // 用户输入的RTMP URL列表
+const showRtmpConfig = ref(false) // 是否显示RTMP配置界面
+
+// 获取当前路由路径
+const route = useRoute()
+const currentPath = route.path
 
 // --- API 调用封装 ---
 const apiFetch = async (endpoint, options = {}) => {
@@ -588,6 +631,117 @@ const startAlertPolling = () => {
   }, 2000) // 轮询频率调整为2秒
 }
 
+// --- RTMP流管理函数 ---
+const addRtmpUrl = () => {
+  rtmpUrls.value.push('')
+}
+
+const removeRtmpUrl = (index) => {
+  if (rtmpUrls.value.length > 1) {
+    rtmpUrls.value.splice(index, 1)
+  }
+}
+
+const connectAllRtmpStreams = async () => {
+  // 过滤空URL
+  const validUrls = rtmpUrls.value.filter(url => url.trim() !== '')
+  
+  if (validUrls.length === 0) {
+    alert('请至少输入一个有效的RTMP流地址')
+    return
+  }
+
+  try {
+    // 停止其他视频源
+    stopPolling()
+    if (activeSource.value === 'webcam') {
+      await disconnectWebcam()
+    }
+
+    // 连接RTMP流
+    const response = await fetch(`${API_BASE_URL}/rtmp/connect`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        streams: validUrls
+      })
+    })
+
+    const data = await response.json()
+    
+    if (response.ok) {
+      // 更新流状态
+      rtmpStreams.value = data.results.map((result, index) => ({
+        url: validUrls[index],
+        connected: result.connected,
+        error: !result.connected,
+        errorMessage: result.error || ''
+      }))
+      
+      rtmpConnected.value = rtmpStreams.value.some(stream => stream.connected)
+      activeSource.value = 'rtmp'
+      showRtmpConfig.value = false
+      
+      const connectedCount = rtmpStreams.value.filter(s => s.connected).length
+      alert(`成功连接 ${connectedCount}/${validUrls.length} 个RTMP流`)
+      
+      // 开始轮询告警信息
+      startAlertPolling()
+    } else {
+      throw new Error(data.message || '连接RTMP流失败')
+    }
+  } catch (error) {
+    console.error('连接RTMP流失败:', error)
+    alert(`连接失败: ${error.message}`)
+  }
+}
+
+const disconnectAllRtmpStreams = async () => {
+  try {
+    await fetch(`${API_BASE_URL}/rtmp/disconnect`, {
+      method: 'POST'
+    })
+    
+    rtmpStreams.value = []
+    rtmpConnected.value = false
+    activeSource.value = ''
+    stopAlertPolling()
+    
+    alert('已断开所有RTMP流连接')
+  } catch (error) {
+    console.error('断开RTMP流失败:', error)
+    alert('断开连接失败')
+  }
+}
+
+const getStreamUrl = (index) => {
+  return `${API_BASE_URL}/rtmp/stream/${index}?t=${new Date().getTime()}`
+}
+
+const getStreamStatus = (stream) => {
+  if (stream.connected) return '已连接'
+  if (stream.error) return '连接失败'
+  return '连接中...'
+}
+
+const getGridClass = () => {
+  const count = rtmpStreams.value.length
+  if (count <= 1) return 'grid-1'
+  if (count <= 4) return 'grid-2x2'
+  if (count <= 6) return 'grid-2x3'
+  return 'grid-3x3'
+}
+
+const showRtmpConfigDialog = () => {
+  showRtmpConfig.value = true
+  // 确保至少有一个输入框
+  if (rtmpUrls.value.length === 0) {
+    rtmpUrls.value = ['']
+  }
+}
+
 // 生命周期钩子
 onMounted(() => {
   loadConfig()
@@ -928,6 +1082,241 @@ onUnmounted(() => {
   background-color: #d32f2d;
 }
 
+/* RTMP配置弹窗样式 */
+.rtmp-config-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.rtmp-config-dialog {
+  background-color: #2d2d2d;
+  border-radius: 8px;
+  padding: 24px;
+  width: 90%;
+  max-width: 600px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.rtmp-config-dialog h3 {
+  margin: 0 0 20px 0;
+  color: #e0e0e0;
+  text-align: center;
+}
+
+.rtmp-url-list {
+  margin-bottom: 20px;
+}
+
+.rtmp-url-item {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+  align-items: center;
+}
+
+.rtmp-url-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background-color: #1a1a1a;
+  color: #e0e0e0;
+  font-size: 14px;
+}
+
+.rtmp-url-input:focus {
+  outline: none;
+  border-color: #4CAF50;
+}
+
+.remove-url-btn {
+  padding: 8px 12px;
+  background-color: #f44336;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.remove-url-btn:hover:not(:disabled) {
+  background-color: #d32f2f;
+}
+
+.remove-url-btn:disabled {
+  background-color: #666;
+  cursor: not-allowed;
+}
+
+.rtmp-config-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.add-url-btn {
+  padding: 10px 20px;
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.add-url-btn:hover {
+  background-color: #45a049;
+}
+
+.dialog-buttons {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.cancel-btn, .connect-btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.cancel-btn {
+  background-color: #666;
+  color: white;
+}
+
+.cancel-btn:hover {
+  background-color: #555;
+}
+
+.connect-btn {
+  background-color: #007BFF;
+  color: white;
+}
+
+.connect-btn:hover {
+  background-color: #0056b3;
+}
+
+/* RTMP流网格布局 */
+.rtmp-grid {
+  width: 100%;
+  height: 100%;
+}
+
+.streams-grid {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+}
+
+.grid-1 {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
+
+.grid-2x2 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.grid-2x3 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
+}
+
+.grid-3x3 {
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
+}
+
+.stream-item {
+  background-color: #000;
+  border: 1px solid #444;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.stream-header {
+  background-color: #2d2d2d;
+  padding: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #444;
+}
+
+.stream-header h4 {
+  margin: 0;
+  font-size: 14px;
+  color: #e0e0e0;
+}
+
+.stream-status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background-color: #666;
+  color: #fff;
+}
+
+.stream-status.connected {
+  background-color: #4CAF50;
+}
+
+.stream-status.error {
+  background-color: #f44336;
+}
+
+.stream-video {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.stream-error, .stream-loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  color: #888;
+}
+
+.stream-error p {
+  margin: 0;
+  color: #f44336;
+}
+
+.stream-error small {
+  margin-top: 0.5rem;
+  color: #aaa;
+  text-align: center;
+}
+
+.no-streams {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  color: #888;
+}
+
 /* 响应式适配 */
 @media (max-width: 768px) {
   .header-left h1 {
@@ -949,6 +1338,25 @@ onUnmounted(() => {
   .setting-row label {
     flex-basis: 100%;
     margin-bottom: 0.5rem;
+  }
+  
+  .rtmp-config-dialog {
+    min-width: 90vw;
+    padding: 1rem;
+  }
+  
+  .rtmp-url-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .remove-url-btn {
+    align-self: flex-end;
+    width: auto;
+  }
+  
+  .dialog-buttons {
+    flex-direction: column;
   }
 }
 </style>

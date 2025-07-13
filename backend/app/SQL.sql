@@ -1,4 +1,6 @@
 -- 创建数据库
+
+
 CREATE DATABASE IF NOT EXISTS station_monitoring_system;
 USE station_monitoring_system;
 

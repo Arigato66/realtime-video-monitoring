@@ -166,7 +166,7 @@ Report.docx
 Report.pdf
 
 # Custom rules for this project
-*.pt
+# *.pt  # 注释掉这一行以允许YOLO模型文件被包含
 *.pth
 /uploads/
 /runs/

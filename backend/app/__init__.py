@@ -6,6 +6,8 @@ from flask_bcrypt import Bcrypt
 from flask import jsonify  
 from flask_sqlalchemy import SQLAlchemy 
 import os
+# 移除这行导入，避免循环依赖
+# from app.models.passenger import Passenger
 
 db = SQLAlchemy()
 bcrypt = Bcrypt()
@@ -17,7 +19,10 @@ def create_app():
     os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
     
     app = Flask(__name__)
-    CORS(app)  # 启用跨域支持
+    # 配置CORS，明确允许的源和方法
+    CORS(app, origins=["http://localhost:5175", "http://localhost:5176"], 
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         allow_headers=["Content-Type", "Authorization"])
     swagger = Swagger(app) # 初始化 Flasgger
     
     app.config.from_object('app.config.Config')
@@ -39,6 +44,7 @@ def create_app():
     from app.routes.auth import auth_bp 
     # 在蓝图导入部分添加
     from app.routes.main import main_bp  # 添加这行
+    from app.routes.rtmp import rtmp_bp  # 添加RTMP蓝图导入
 
     # 在蓝图注册部分添加
     app.register_blueprint(main_bp)  # 添加这行
@@ -48,24 +54,45 @@ def create_app():
     app.register_blueprint(config_bp)
     app.register_blueprint(face_bp)
     app.register_blueprint(auth_bp)
+    app.register_blueprint(rtmp_bp)  # 添加RTMP蓝图注册
     
     add_jwt_handlers(jwt)
     
     # 添加全局错误处理
     add_error_handlers(app)
+    
     with app.app_context():
         try:
-            # 使用SQLAlchemy 2.0+的正确语法
+            # 在这里导入模型，避免循环依赖
+            from app.models.user import User
+            from app.models.passenger import Passenger
+            
+            # 创建所有数据库表
+            db.create_all()
+            print("✅ 数据库表创建成功")
+            
+            # 创建默认管理员用户（如果不存在）
+            admin_user = User.query.filter_by(username='admin@qq.com').first()
+            if not admin_user:
+                admin_user = User(
+                    username='admin@qq.com',
+                    password='123456',  # 明文密码，仅用于测试
+                    email='admin@qq.com',
+                    is_active=True
+                )
+                db.session.add(admin_user)
+                db.session.commit()
+                print("✅ 默认管理员用户创建成功")
+            
+            # 测试数据库连接
             with db.engine.connect() as conn:
                 result = conn.execute(db.text("SELECT 1"))
-                print("✅ MySQL数据库连接成功")
+                print("✅ 数据库连接成功")
         except Exception as e:
-            print(f"❌ MySQL数据库连接失败: {e}")
+            print(f"❌ 数据库初始化失败: {e}")
             # 打印详细的错误堆栈信息，便于调试
             import traceback
             print(traceback.format_exc())
-
-
 
     return app 
 
