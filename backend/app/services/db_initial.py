@@ -1,10 +1,16 @@
-import mysql.connector
-from app.config import Config
 import uuid
+import os
+from app.config import Config
 
 def init_database():
     """初始化数据库和表结构"""
+    # 检查是否使用SQLite数据库
+    if 'sqlite' in Config.SQLALCHEMY_DATABASE_URI:
+        print("✅ 使用SQLite数据库，跳过MySQL初始化")
+        return True
+        
     try:
+        import mysql.connector
         # 创建数据库连接
         conn = mysql.connector.connect(
             host=Config.MYSQL_HOST,
