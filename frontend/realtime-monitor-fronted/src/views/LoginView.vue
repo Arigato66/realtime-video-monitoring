@@ -60,29 +60,53 @@ const onShow = () => { isShow.value = true }
 const onClose = () => { isShow.value = false }
 const onSuccess = () => { isVerified.value = true; onClose() }
 
+// 在 <script setup> 部分，修改 handleLogin 方法：
+
 const handleLogin = async () => {
   if (!isVerified.value) {
     alert('请先完成拼图验证！')
     return
   }
-  // 组装登录参数（与后端接口字段匹配）
+  
+  // 组装登录参数
   const credentials = {
-    username: email.value,  // 如果你后端用username登录，就传这个；如果用email，改为email: email.value
+    username: email.value,
     password: password.value
   }
-    try {
+  
+  console.log('准备登录，凭证:', credentials)
+  
+  try {
     // 调用Pinia中的登录方法
+    console.log('🚀 开始调用登录API...')
     const loginSuccess = await authStore.login(credentials)
+    console.log('🔄 登录API调用完成，结果:', loginSuccess)
+    
     if (loginSuccess) {
+      console.log('✅ 登录成功，准备跳转到首页')
       // 登录成功，跳转首页
-      router.push('/home')
+      await router.push('/home')
+      console.log('✅ 页面跳转完成')
     } else {
+      console.log('❌ 登录失败：用户名或密码错误')
       errorMsg.value = '用户名或密码错误'
+      alert('登录失败：用户名或密码错误')
     }
   } catch (error) {
-    // 处理请求异常（如网络错误、后端500错误）
-    console.error('登录请求失败：', error)
-    errorMsg.value = '登录失败，请检查网络或联系管理员'
+    // 处理请求异常
+    console.error('❌ 登录请求失败：', error)
+    
+    let errorMessage = '登录失败'
+    if (error.response) {
+      errorMessage = `服务器错误 ${error.response.status}: ${error.response.data?.error || error.response.statusText}`
+    } else if (error.request) {
+      errorMessage = '网络连接失败，请检查网络设置'
+    } else {
+      errorMessage = error.message || '未知错误'
+    }
+    
+    errorMsg.value = errorMessage
+    alert(errorMessage)
   }
 }
 

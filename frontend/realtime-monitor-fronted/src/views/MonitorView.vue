@@ -222,8 +222,8 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import Sidebar from '../components/Sidebar.vue'
 
 // API端点设置
-// 使用相对路径替代硬编码的服务器地址
-const API_BASE_URL = '/api'
+// 使用环境变量替代硬编码地址
+const API_BASE_URL = import.meta.env.VITE_SERVER_ROOT_URL ? `${import.meta.env.VITE_SERVER_ROOT_URL}/api` : 'http://localhost:5000/api'
 const VIDEO_FEED_URL = `${API_BASE_URL}/video_feed`
 
 // 状态变量

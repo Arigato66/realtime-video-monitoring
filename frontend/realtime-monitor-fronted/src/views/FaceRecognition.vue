@@ -120,8 +120,10 @@ import Sidebar from '../components/Sidebar.vue'
 const route = useRoute()
 const currentPath = route.path
 
+// 在 <script setup> 部分，找到 API端点设置 部分，修改为：
+
 // API端点设置
-const SERVER_ROOT_URL = 'http://localhost:5000'
+const SERVER_ROOT_URL = import.meta.env.VITE_SERVER_ROOT_URL || 'http://localhost:5000'
 const API_BASE_URL = `${SERVER_ROOT_URL}/api`
 const VIDEO_FEED_URL = `${API_BASE_URL}/video_feed`
 

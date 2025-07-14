@@ -21,7 +21,7 @@ class Config:
     MYSQL_PORT = 3306
     MYSQL_USER = 'root'
     MYSQL_PASSWORD = '123456'
-    MYSQL_DB = 'realtime_monitoring'
+    MYSQL_DB = 'station_monitoring_system'
     MYSQL_CHARSET = 'utf8mb4'
 
     # 使用SQLite数据库

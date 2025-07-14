@@ -91,9 +91,11 @@ interface Device {
   streamUrl: string;
 }
 
+// 在 <script setup> 部分，找到 API端点设置 部分，修改为：
+
 // API端点设置
-// 使用相对路径替代硬编码的服务器地址
-const API_BASE_URL = '/api';
+// 使用环境变量替代硬编码地址
+const API_BASE_URL = import.meta.env.VITE_SERVER_ROOT_URL ? `${import.meta.env.VITE_SERVER_ROOT_URL}/api` : 'http://localhost:5000/api'
 
 // 状态变量（指定类型为Device数组）
 const devices = ref<Device[]>([]);

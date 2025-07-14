@@ -20,7 +20,11 @@ def create_app():
     
     app = Flask(__name__)
     # 配置CORS，明确允许的源和方法
-    CORS(app, origins=["http://localhost:5175", "http://localhost:5176"], 
+    CORS(app, origins=[
+        "http://localhost:5175", 
+        "http://localhost:5176",
+        "http://120.46.199.152"  # 添加云服务器域名
+    ], 
          methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
          allow_headers=["Content-Type", "Authorization"])
     swagger = Swagger(app) # 初始化 Flasgger
