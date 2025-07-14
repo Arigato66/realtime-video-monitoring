@@ -112,6 +112,11 @@
                     :class="{ active: detectionMode === 'fall_detection' }">
                     跌倒检测
                   </button>
+                  <button 
+                    @click="setDetectionMode('smoking_detection')" 
+                    :class="{ active: detectionMode === 'smoking_detection' }">
+                    抽烟检测
+                  </button>
                 </div>
               </div>
               
@@ -292,7 +297,8 @@ const setDetectionMode = async (mode) => {
     const modeNames = {
       'object_detection': '目标检测',
       'face_only': '纯人脸识别',
-      'fall_detection': '跌倒检测'
+      'fall_detection': '跌倒检测',
+      'smoking_detection': '抽烟检测'
     };
     alert(`检测模式已切换为: ${modeNames[mode] || mode}`);
 

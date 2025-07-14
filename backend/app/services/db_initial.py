@@ -1,6 +1,7 @@
 import uuid
 import os
 from app.config import Config
+from werkzeug.security import generate_password_hash  # 导入密码哈希工具
 
 def init_database():
     """初始化数据库和表结构"""
@@ -181,35 +182,35 @@ def init_database():
         CREATE TABLE IF NOT EXISTS users (
             user_id VARCHAR(36) NOT NULL PRIMARY KEY COMMENT '用户唯一标识符(UUID)',
             username VARCHAR(50) NOT NULL UNIQUE COMMENT '用户名',
-            password VARCHAR(100) NOT NULL COMMENT '明文密码',  -- 移除"哈希"注释
+            password VARCHAR(255) NOT NULL COMMENT '密码哈希值',  -- 存储哈希后的密码
             email VARCHAR(100) NOT NULL UNIQUE COMMENT '邮箱',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
             last_login TIMESTAMP NULL COMMENT '最后登录时间',
             is_active BOOLEAN NOT NULL DEFAULT TRUE COMMENT '账户是否激活'
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    
         """)
 
 
         print("✅ 数据库表创建成功!")
        
-        check_query = "SELECT COUNT(*) FROM users WHERE username = 'admin@qq.co'"
+        check_query = "SELECT COUNT(*) FROM users WHERE username = 'admin'"
         cursor.execute(check_query)
         count = cursor.fetchone()[0]
 
         if count == 0:
             # 生成UUID作为user_id
             admin_user_id = str(uuid.uuid4())
+            hashed_password = generate_password_hash('123')
             
             insert_query = """
             INSERT INTO users (
                 user_id, username, password, email, created_at, last_login, is_active
             ) VALUES (
-                %s, 'admin@qq.com', '123', 'admin@qq.com', 
+                %s, 'admin', %s, 'admin@qq.com', 
                 '2025-07-11 11:39:32', '2025-07-11 03:40:23', 1
             )
             """
-            cursor.execute(insert_query, (admin_user_id,))
+            cursor.execute(insert_query, (admin_user_id, hashed_password))
             conn.commit()
             print(f"✅ 管理员用户插入成功 (ID: {admin_user_id})")
         else:

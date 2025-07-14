@@ -35,7 +35,7 @@ def main():
     args = parser.parse_args()
     
     # 初始化YOLO模型
-    model = YOLO("yolov8n.pt")
+    model = YOLO("yolo-Weights/yolov8n.pt")
     
     # 创建Flask应用
     app = create_app()

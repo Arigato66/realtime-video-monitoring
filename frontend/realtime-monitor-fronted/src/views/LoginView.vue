@@ -6,8 +6,8 @@
       <h1>登录</h1>
       <form @submit.prevent="handleLogin">
         <div class="form-group">
-          <label for="email">用户名</label>
-          <input id="email" type="email" v-model="email" required placeholder="请输入邮箱" />
+          <label for="username">用户名</label>
+          <input id="username" type="text" v-model="username" required placeholder="请输入用户名" />
         </div>
         <div class="form-group">
           <label for="password">密码</label>
@@ -48,7 +48,7 @@ import * as THREE from "three"
 import WAVES from "vanta/dist/vanta.waves.min"
 import { useAuthStore } from '@/stores/auth'
 
-const email = ref('admin@qq.com')
+const username = ref('admin')
 const password = ref('123')
 const router = useRouter()
 const isShow = ref(false)
@@ -60,53 +60,36 @@ const onShow = () => { isShow.value = true }
 const onClose = () => { isShow.value = false }
 const onSuccess = () => { isVerified.value = true; onClose() }
 
-// 在 <script setup> 部分，修改 handleLogin 方法：
-
 const handleLogin = async () => {
   if (!isVerified.value) {
     alert('请先完成拼图验证！')
     return
   }
-  
-  // 组装登录参数
+  // 组装登录参数（与后端接口字段匹配）
   const credentials = {
-    username: email.value,
+    username: username.value,  // 如果你后端用username登录，就传这个；如果用username，改为username: username.value
     password: password.value
   }
-  
-  console.log('准备登录，凭证:', credentials)
-  
+
+  // 关键：打印前端即将发送的用户名和密码（开发环境调试用）
+  console.log('前端登录参数：', {
+    username: credentials.username,
+    password: credentials.password // 注意：生产环境必须删除密码打印
+  })
+
   try {
     // 调用Pinia中的登录方法
-    console.log('🚀 开始调用登录API...')
     const loginSuccess = await authStore.login(credentials)
-    console.log('🔄 登录API调用完成，结果:', loginSuccess)
-    
     if (loginSuccess) {
-      console.log('✅ 登录成功，准备跳转到首页')
       // 登录成功，跳转首页
-      await router.push('/home')
-      console.log('✅ 页面跳转完成')
+      router.push('/home')
     } else {
-      console.log('❌ 登录失败：用户名或密码错误')
       errorMsg.value = '用户名或密码错误'
-      alert('登录失败：用户名或密码错误')
     }
   } catch (error) {
-    // 处理请求异常
-    console.error('❌ 登录请求失败：', error)
-    
-    let errorMessage = '登录失败'
-    if (error.response) {
-      errorMessage = `服务器错误 ${error.response.status}: ${error.response.data?.error || error.response.statusText}`
-    } else if (error.request) {
-      errorMessage = '网络连接失败，请检查网络设置'
-    } else {
-      errorMessage = error.message || '未知错误'
-    }
-    
-    errorMsg.value = errorMessage
-    alert(errorMessage)
+    // 处理请求异常（如网络错误、后端500错误）
+    console.error('登录请求失败：', error)
+    errorMsg.value = '登录失败，请检查网络或联系管理员'
   }
 }
 

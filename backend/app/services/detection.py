@@ -10,6 +10,7 @@ from app.services.alerts import (
 from app.utils.geometry import point_in_polygon, distance_to_polygon
 from app.services import face_service
 from app.services import system_state
+from app.services.smoking_detection_service import SmokingDetectionService
 from deepface import DeepFace
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -26,12 +27,14 @@ POSE_MODEL_PATH = os.path.join(MODEL_DIR, "yolov8s-pose.pt")
 OBJECT_MODEL_PATH = os.path.join(MODEL_DIR, "yolov8n.pt")
 
 FACE_MODEL_PATH = os.path.join(MODEL_DIR, "yolov8n-face-lindevs.pt")
+SMOKING_MODEL_PATH = os.path.join(MODEL_DIR, "smoking_detection.pt")
 
 
 # 全局变量来持有加载的模型
 pose_model = None
 object_model = None
 face_model = None
+smoking_model = None
 
 def get_pose_model():
     """获取姿态估计模型实例"""
@@ -53,6 +56,13 @@ def get_face_model():
     if face_model is None:
         face_model = YOLO(FACE_MODEL_PATH)
     return face_model
+
+def get_smoking_model():
+    """获取抽烟检测模型实例"""
+    global smoking_model
+    if smoking_model is None:
+        smoking_model = SmokingDetectionService(model_path=SMOKING_MODEL_PATH)
+    return smoking_model
 
 # (保留get_model函数以兼容旧代码，但现在让它返回目标检测模型)
 def get_model():
@@ -169,6 +179,7 @@ def process_video(filepath, uploads_dir):
     object_model_local = YOLO(OBJECT_MODEL_PATH)
     pose_model_local = YOLO(POSE_MODEL_PATH)
     face_model_local = YOLO(FACE_MODEL_PATH)
+    # smoking_model_local = get_smoking_model() # BUG-FIX: 改为按需加载，避免影响其他功能
     
     # 为本次视频处理创建一个新的人脸识别缓存
     face_recognition_cache = {}
@@ -227,6 +238,13 @@ def process_video(filepath, uploads_dir):
             if 'face_model' not in face_recognition_cache:
                 face_recognition_cache['face_model'] = face_model_local
             process_faces_only(processed_frame, frame_count, face_recognition_cache)
+        
+        elif system_state.DETECTION_MODE == 'smoking_detection':
+            # 执行抽烟检测
+            smoking_model_local = get_smoking_model() # 按需加载模型
+            results = smoking_model_local.predict(processed_frame)
+            process_smoking_detection_results(results, processed_frame, smoking_model_local)
+
 
         # 写入处理后的帧到输出视频
         # 确保帧是BGR格式，这是OpenCV的标准格式
@@ -256,6 +274,14 @@ def process_video(filepath, uploads_dir):
         "file_url": output_url,
         "alerts": get_alerts()
     }
+
+
+def process_smoking_detection_results(results, frame, model_service):
+    """处理抽烟检测结果"""
+    frame, is_smoking_detected = model_service.plot_bboxes(results, frame)
+    if is_smoking_detected:
+        add_alert("Smoking Detected")
+
 
 def process_object_detection_results(results, frame, time_diff, frame_count):
     """

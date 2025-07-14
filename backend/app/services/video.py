@@ -83,6 +83,14 @@ def video_feed():
                 # 将处理结果复制到要编码的帧上
                 processed_frame = frame
             
+            elif system_state.DETECTION_MODE == 'smoking_detection':
+                # 获取抽烟检测模型
+                smoking_model = detection_service.get_smoking_model()
+                # 执行检测
+                results = smoking_model.predict(processed_frame)
+                # 处理并绘制结果
+                detection_service.process_smoking_detection_results(results, processed_frame, smoking_model)
+
             # 将处理后的帧编码为JPEG格式
             (flag, encodedImage) = cv2.imencode(".jpg", processed_frame)
             if not flag:
