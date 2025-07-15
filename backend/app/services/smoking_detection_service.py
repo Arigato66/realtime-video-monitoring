@@ -7,6 +7,14 @@ import os
 class SmokingDetectionService:
     def __init__(self, model_path='yolov8n.pt'):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        print(f"--- Smoking Detection Service ---", flush=True)
+        print(f"Initializing on device: {self.device.upper()}", flush=True)
+        print(f"CUDA available: {torch.cuda.is_available()}", flush=True)
+        if torch.cuda.is_available():
+            print(f"CUDA device count: {torch.cuda.device_count()}", flush=True)
+            print(f"Current CUDA device: {torch.cuda.current_device()}", flush=True)
+            print(f"Device name: {torch.cuda.get_device_name(torch.cuda.current_device())}", flush=True)
+        print(f"---------------------------------", flush=True)
         self.model = self.load_model(model_path)
         self.class_names = self.model.model.names
         self.box_annotator = BoxAnnotator(

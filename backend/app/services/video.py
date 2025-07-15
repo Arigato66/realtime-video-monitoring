@@ -57,9 +57,9 @@ def video_feed():
     new_frame_time = 0
 
     def generate():
-        frame_count = 0
-        prev_frame_time = time.time()
-        violence_model = None
+
+        nonlocal object_model_stream, face_model_stream, pose_model_stream
+        nonlocal frame_count, prev_frame_time, new_frame_time, violence_model, vgg_model, image_model_transfer, violence_buffer, violence_status, violence_prob, violence_last_infer_frame
         try:
             while CAMERA_ACTIVE:
                 ret, frame = cap.read()
@@ -75,7 +75,12 @@ def video_feed():
                 if time_diff_fps > 0:
                     fps = 1 / time_diff_fps
                     fps_text = f"FPS: {int(fps)}"
-                    cv2.putText(frame, fps_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                    # --- 修改：将FPS显示移动到右上角 ---
+                    # 获取文本大小以便精确放置
+                    (text_width, _), _ = cv2.getTextSize(fps_text, cv2.FONT_HERSHEY_SIMPLEX, 1, 2)
+                    # 从帧宽度中减去文本宽度和一些边距（10px）
+                    top_right_x = frame.shape[1] - text_width - 10
+                    cv2.putText(frame, fps_text, (top_right_x, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 prev_frame_time = new_frame_time
 
                 # 诊断日志
@@ -154,15 +159,32 @@ def video_feed():
                 # 以multipart格式产生输出帧
                 yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + 
                       bytearray(encodedImage) + b'\r\n')
+        
+        except (GeneratorExit, ConnectionAbortedError):
+            print("客户端断开连接，正在清理视频流资源...")
         finally:
-            # 确保无论如何都能释放摄像头
-            print("释放摄像头资源...")
+            print("释放摄像头和模型资源...")
             cap.release()
-            cv2.destroyAllWindows()
+
+            # 显式删除模型实例以释放内存
+            del object_model_stream
+            del face_model_stream
+            del pose_model_stream
             
-    # 返回一个包含视频流的HTTP响应
+            if violence_model:
+                del violence_model
+            if vgg_model:
+                del vgg_model
+            if image_model_transfer:
+                del image_model_transfer
+            
+            # 对于TensorFlow模型，清理会话至关重要
+            tf.keras.backend.clear_session()
+            
+            print("所有模型和摄像头资源已成功释放。")
+
     return Response(generate(),
-                    mimetype = "multipart/x-mixed-replace; boundary=frame")
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
 
 def stop_video_feed_service():
     """停止摄像头视频流的服务函数"""
