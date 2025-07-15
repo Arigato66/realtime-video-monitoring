@@ -1,7 +1,4 @@
-from flask import Blueprint, jsonify, request
-from app import socketio
-from flask_socketio import emit
-from app.services import real_time_detection
+from flask import Blueprint, jsonify
 
 # 创建API蓝图
 api_bp = Blueprint('api', __name__, url_prefix='/api')
@@ -53,21 +50,4 @@ def get_alerts():
               description: 警报信息列表.
     """
     from app.services.alerts import get_alerts
-    return jsonify({"alerts": get_alerts()})
-
-# 新增：尖叫声检测 WebSocket 路由
-@socketio.on('scream_detect', namespace='/api/scream_ws')
-def handle_scream_detect(message):
-    sid = request.sid  # 获取当前客户端 session id
-    action = message.get('action')
-    if action == 'start':
-        def ws_callback(result):
-            # 用 socketio.emit 并指定 to=sid
-            socketio.emit('scream_status', result, namespace='/api/scream_ws', to=sid)
-            if result['status'] == 'scream':
-                socketio.emit('scream_alert', {'alert': '检测到尖叫声！'}, namespace='/api/scream_ws', to=sid)
-        real_time_detection.start_scream_detection(ws_callback)
-        socketio.emit('scream_status', {'status': 'listening'}, namespace='/api/scream_ws', to=sid)
-    elif action == 'stop':
-        real_time_detection.stop_scream_detection()
-        socketio.emit('scream_status', {'status': 'stopped'}, namespace='/api/scream_ws', to=sid) 
+    return jsonify({"alerts": get_alerts()}) 

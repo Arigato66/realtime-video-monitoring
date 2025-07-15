@@ -14,7 +14,6 @@ from app.services.smoking_detection_service import SmokingDetectionService
 import time
 from concurrent.futures import ThreadPoolExecutor
 from app.services import violenceDetect
-from app.services.liveness_service import predict_liveness
 
 # --- 模型管理 (使用相对路径) ---
 # 路径是相对于 backend/app/services/ 目录的
@@ -574,46 +573,65 @@ def process_faces_only(frame, frame_count, state):
     """
     只进行人脸检测和识别的处理。
     使用 YOLOv8 进行检测，使用 Dlib 进行识别。
-    集成活体检测。
+    这个函数现在直接在传入的 frame 上绘图，不再返回新的 frame。
     """
     face_model_local = state.get('face_model')
     if face_model_local is None:
         face_model_local = YOLO(FACE_MODEL_PATH)
         state['face_model'] = face_model_local
 
+    # --- 性能诊断：步骤1 ---
     t0 = time.time()
+    # 使用 YOLOv8 进行人脸检测
+    # 修复：对于可能为静态图的场景，使用 .predict() 而不是 .track()
     face_results = face_model_local.predict(frame, verbose=False)
     t1 = time.time()
-    boxes = [box.xyxy[0].tolist() for box in face_results[0].boxes]
+    
+    # 从结果中提取边界框
+    boxes = [box.xyxy[0].tolist() for box in face_results[0].boxes] # 获取所有检测框
+    
+    # 如果没有检测到人脸，直接返回
     if not boxes:
         return
+        
+    # --- 性能诊断：步骤2 ---
     t2 = time.time()
+    # 将边界框传递给 Dlib 服务进行识别
     recognized_faces = dlib_face_service.identify_faces(frame, boxes)
     t3 = time.time()
+
+    # --- 打印诊断日志 ---
     print(f"DIAGNOSTICS - YOLO Detection: {t1-t0:.4f}s, Dlib Recognition: {t3-t2:.4f}s")
+    
+    # 3. 在帧上绘制结果
     for name, box in recognized_faces:
+        # 双重保险：再次确保坐标是整数
         left, top, right, bottom = [int(p) for p in box]
         color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
-        # --- 活体检测 ---
-        face_crop = frame[top:bottom, left:right]
-        liveness_label, liveness_conf = predict_liveness(face_crop)
-        liveness_text = f"{liveness_label} ({liveness_conf:.2f})"
-        if liveness_label == "fake" and liveness_conf > 0.8:
-            add_alert(f"警告: 检测到非活体人脸（疑似照片攻击）: {name}")
-            color = (0, 0, 255)
-            cv2.putText(frame, "FAKE!", (left, top-30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
-        else:
-            cv2.putText(frame, liveness_text, (left, top-30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+                
+        # 绘制边界框
         cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
+        
+        # 准备绘制名字的文本
         label = f"{name}"
-        (label_width, _) , _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-        label_bg_height = 20
-        if top - label_bg_height < 5:
+        
+        (label_width, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        
+        # --- 智能定位标签位置 ---
+        label_bg_height = 20 # 标签背景的高度
+        
+        # 判断标签应该放在框内还是框外
+        if top - label_bg_height < 5: # 增加一个5像素的边距
+            # 空间不足，放在内部
             cv2.rectangle(frame, (left, top), (left + label_width + 4, top + label_bg_height), color, -1)
-            cv2.putText(frame, label, (left + 2, top + label_bg_height - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+            cv2.putText(frame, label, (left + 2, top + label_bg_height - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         else:
+            # 空间充足，放在外部
             cv2.rectangle(frame, (left, top - label_bg_height), (left + label_width + 4, top), color, -1)
-            cv2.putText(frame, label, (left + 2, top - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+            cv2.putText(frame, label, (left + 2, top - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+    # 不再返回 frame，因为是直接在原图上修改
+    # return frame
 
 
 def draw_distance_line(frame, foot_point, distance):
