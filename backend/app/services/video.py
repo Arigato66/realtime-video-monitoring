@@ -57,7 +57,9 @@ def video_feed():
     new_frame_time = 0
 
     def generate():
-
+        frame_count = 0
+        prev_frame_time = time.time()
+        violence_model = None
         try:
             while CAMERA_ACTIVE:
                 ret, frame = cap.read()
