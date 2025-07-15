@@ -111,7 +111,17 @@
                   </button>
                 </div>
               </div>
-              
+               <!-- 在检测模式和危险区域设置之间插入 -->
+              <div class="control-section">
+                <div class="scream-status-bar">
+                  <span>尖叫声检测状态：{{ screamStatus }}</span>
+                  <button v-if="!screamDetecting" @click="startScreamDetection">开启尖叫声检测</button>
+                  <button v-else @click="stopScreamDetection">关闭尖叫声检测</button>
+                  <div class="scream-volume-bar">
+                    <div class="scream-volume-inner" :style="{width: (screamVolume*100).toFixed(0)+'%', background: screamVolume > 0.5 ? '#f44336' : screamVolume > 0.2 ? '#ffc107' : '#4caf50'}"></div>
+                  </div>
+                </div>
+              </div>
               <!-- 危险区域编辑 -->
               <div class="control-section">
                 <h3>危险区域设置</h3>
@@ -227,7 +237,51 @@ const registeredUsers = ref([]) // 已注册用户列表
 const pollingIntervalId = ref(null) // 用于轮询的定时器ID
 const videoTaskId = ref(''); // 保存当前视频处理任务的ID
 const webcamImg = ref(null);
+const screamStatus = ref('未开启');
+const screamDetecting = ref(false);
+let screamSocket = null;
+const screamVolume = ref(0);
 
+function startScreamDetection() {
+  if (screamSocket) return;
+  screamSocket = io(`${SERVER_ROOT_URL}/api/scream_ws`);
+  screamSocket.on('connect', () => {
+    screamSocket.emit('scream_detect', { action: 'start' });
+    screamStatus.value = '正在监听...';
+    screamDetecting.value = true;
+  });
+  screamSocket.on('scream_status', (data) => {
+    if (data.volume !== undefined) screamVolume.value = data.volume;
+    if (data.status === 'scream') {
+      screamStatus.value = '🚨 检测到尖叫声！';
+    } else if (data.status === 'normal') {
+      screamStatus.value = '✅ 无尖叫';
+    } else if (data.status === 'listening') {
+      screamStatus.value = '正在监听...';
+    } else if (data.status === 'stopped') {
+      screamStatus.value = '已停止';
+      screamDetecting.value = false;
+    }
+  });
+  screamSocket.on('scream_alert', (data) => {
+    alerts.value.unshift(data.alert);
+  });
+  screamSocket.on('disconnect', () => {
+    screamStatus.value = '已断开';
+    screamDetecting.value = false;
+    screamSocket = null;
+  });
+}
+
+function stopScreamDetection() {
+  if (screamSocket) {
+    screamSocket.emit('scream_detect', { action: 'stop' });
+    screamSocket.disconnect();
+    screamSocket = null;
+    screamStatus.value = '已停止';
+    screamDetecting.value = false;
+  }
+}
 // --- API 调用封装 ---
 // 使用新的 DLIB_API_BASE_URL
 const dlibApiFetch = async (endpoint, options = {}) => {
@@ -738,6 +792,10 @@ onUnmounted(() => {
   // 停止所有正在运行的视频流
   disconnectWebcam(); // 这个函数现在会处理摄像头关闭
   closeRegistrationModal(true); // 组件卸载时确保清理, 并告知函数不要重启摄像头
+  if (screamSocket) {
+    screamSocket.disconnect();
+    screamSocket = null;
+  }
 });
 </script>
 
@@ -1173,5 +1231,41 @@ onUnmounted(() => {
 }
 .finish-button:hover {
   background-color: #45a049;
+}
+scream-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  background: #222;
+  color: #fff;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: 1.1em;
+}
+.scream-status-bar button {
+  background: #007bff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 0.3rem 1rem;
+  cursor: pointer;
+}
+.scream-status-bar button:hover {
+  background: #0056b3;
+}
+.scream-volume-bar {
+  width: 120px;
+  height: 18px;
+  background: #444;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-left: 1.5rem;
+  display: flex;
+  align-items: center;
+}
+.scream-volume-inner {
+  height: 100%;
+  transition: width 0.1s, background 0.2s;
 }
 </style>
