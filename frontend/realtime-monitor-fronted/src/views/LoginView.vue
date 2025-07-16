@@ -48,8 +48,8 @@ import * as THREE from "three"
 import WAVES from "vanta/dist/vanta.waves.min"
 import { useAuthStore } from '@/stores/auth'
 
-const username = ref('admin')
-const password = ref('123')
+const username = ref('')
+const password = ref('')
 const router = useRouter()
 const isShow = ref(false)
 const isVerified = ref(false)

@@ -23,6 +23,7 @@
 <script setup lang="ts">
 import { ref, defineProps, defineEmits } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 
 // 接收当前路由路径作为参数
 const props = defineProps<{
@@ -30,6 +31,7 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
+const authStore = useAuthStore()
 
 // 路由跳转方法
 const goToMonitorPage = () => {
@@ -53,9 +55,7 @@ const goToDevicePage = () => {
 }
 
 const logout = () => {
-  localStorage.removeItem('authToken')
-  localStorage.removeItem('userInfo')
-  router.replace('/')
+  authStore.logout()
 }
 </script>
 

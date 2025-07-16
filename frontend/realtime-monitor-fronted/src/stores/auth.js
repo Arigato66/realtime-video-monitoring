@@ -46,21 +46,17 @@ export const useAuthStore = defineStore('auth', {
       localStorage.removeItem('user')
       
       // 重定向到登录页（改进：不依赖外部注入的路由）
-      window.location.href = '/login'
+      //window.location.href = '/login'
+       // 使用路由跳转避免页面刷新
+      if (this.router) {
+        this.router.push('/login')
+      }
     },
     
-    // 初始化方法（改进：自动从localStorage加载状态）
-    initialize() {
-      const token = localStorage.getItem('token')
-      const user = JSON.parse(localStorage.getItem('user'))
-      
-      if (token) {
-        this.token = token
-      }
-      
-      if (user) {
-        this.user = user
-      }
+// 简化初始化方法
+    initialize(router) {
+      // 存储路由实例供logout使用
+      this.router = router
     }
   },
   
