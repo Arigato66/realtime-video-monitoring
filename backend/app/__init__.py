@@ -61,7 +61,6 @@ def create_app():
     from app.routes.api import api_bp
     from app.routes.video import video_bp
     from app.routes.config import config_bp
-    from app.routes.face import face_bp
     from app.routes.auth import auth_bp 
     from app.routes.dlib_routes import dlib_bp
     from app.routes.rtmp_routes import rtmp_bp

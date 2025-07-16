@@ -2,25 +2,45 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import os
-import face_recognition
-from app.services.danger_zone import DANGER_ZONE, SAFETY_DISTANCE, LOITERING_THRESHOLD, TARGET_CLASSES
+# --- V4: 修正模块导入问题 ---
+from app.services import danger_zone as danger_zone_service
+from app.services.danger_zone import SAFETY_DISTANCE, LOITERING_THRESHOLD, TARGET_CLASSES
+# --- 结束 V4 ---
 from app.services.alerts import (
     add_alert, update_loitering_time, reset_loitering_time, get_loitering_time,
     update_detection_time, get_alerts, reset_alerts
 )
 from app.utils.geometry import point_in_polygon, distance_to_polygon
-from app.services import face_service
+from app.services.dlib_service import dlib_face_service
 from app.services import system_state
+from app.services.smoking_detection_service import SmokingDetectionService
+import time
+from concurrent.futures import ThreadPoolExecutor
+from app.services import violenceDetect
+# --- 新增：导入config模块以访问其状态 ---
+from app.routes import config as config_state
+# --- 结束新增 ---
 
-# --- 模型管理 ---
-# 我们现在需要管理两个模型
-# 升级到yolov8s-pose.pt以提高精度
-POSE_MODEL_PATH = "yolov8s-pose.pt"
-OBJECT_MODEL_PATH = "yolov8n.pt" # 原始模型
+
+# --- 模型管理 (使用相对路径) ---
+# 路径是相对于 backend/app/services/ 目录的
+# '..' 回退到 backend/app/
+# '../..' 回退到 backend/
+# '../../..' 回退到项目根目录
+BASE_PATH = os.path.join(os.path.dirname(__file__), '..', '..', '..')
+MODEL_DIR = os.path.join(BASE_PATH, 'yolo-Weights') # 统一存放在 yolo-Weights 文件夹
+
+POSE_MODEL_PATH = os.path.join(MODEL_DIR, "yolov8s-pose.pt")
+OBJECT_MODEL_PATH = os.path.join(MODEL_DIR, "yolov8n.pt")
+FACE_MODEL_PATH = os.path.join(MODEL_DIR, "yolov8n-face-lindevs.pt")
+SMOKING_MODEL_PATH = os.path.join(MODEL_DIR, "smoking_detection.pt")
+
 
 # 全局变量来持有加载的模型
 pose_model = None
 object_model = None
+face_model = None
+smoking_model = None
 
 def get_pose_model():
     """获取姿态估计模型实例"""
@@ -35,6 +55,20 @@ def get_object_model():
     if object_model is None:
         object_model = YOLO(OBJECT_MODEL_PATH)
     return object_model
+
+def get_face_model():
+    """获取人脸检测和追踪模型实例"""
+    global face_model
+    if face_model is None:
+        face_model = YOLO(FACE_MODEL_PATH)
+    return face_model
+
+def get_smoking_model():
+    """获取抽烟检测模型实例"""
+    global smoking_model
+    if smoking_model is None:
+        smoking_model = SmokingDetectionService(model_path=SMOKING_MODEL_PATH)
+    return smoking_model
 
 # (保留get_model函数以兼容旧代码，但现在让它返回目标检测模型)
 def get_model():
@@ -57,25 +91,54 @@ def process_image(filepath, uploads_dir):
     返回:
         dict: 包含处理结果的字典
     """
+    # 重置警报，以防上次调用的状态残留
+    reset_alerts()
+    
     # 读取图片
     img = cv2.imread(filepath)
     if img is None:
         return {"status": "error", "message": "Failed to load image"}, 500
     
-    # 执行对象检测
-    model = get_model()
-    detections = model(img)
+    res_plotted = img.copy() # Start with a copy of the original image
     
-    # 处理检测结果
-    res_plotted = detections[0].plot()
+    # --- 修复：为静态图片处理添加模式判断 ---
+    if system_state.DETECTION_MODE == 'face_only':
+        # 在人脸识别模式下，直接调用人脸处理函数
+        # 注意：对于静态图片，我们没有追踪状态，所以创建一个临时的state
+        face_model_local = get_face_model()
+        state = {'face_model': face_model_local}
+        process_faces_only(res_plotted, 1, state) # frame_count 设为 1
     
-    # 绘制危险区域
-    danger_zone_pts = DANGER_ZONE.reshape((-1, 1, 2))
-    overlay = res_plotted.copy()
-    cv2.fillPoly(overlay, [danger_zone_pts], (0, 0, 255))
-    cv2.addWeighted(overlay, 0.4, res_plotted, 0.6, 0, res_plotted)
-    cv2.polylines(res_plotted, [danger_zone_pts], True, (0, 0, 255), 3)
-    
+    elif system_state.DETECTION_MODE == 'smoking_detection':
+        # --- FIX: Use fresh, local model instances for stateless image processing ---
+        face_model_local = YOLO(FACE_MODEL_PATH)
+        object_model_local = YOLO(OBJECT_MODEL_PATH)
+        smoking_model = get_smoking_model() # This service is a stateless wrapper, it's fine
+
+        face_results = face_model_local.predict(img, verbose=False)
+        person_results = object_model_local.predict(img, classes=[0], verbose=False)
+
+        # Call the processing function with the results, which draws on the frame
+        res_plotted = process_smoking_detection_hybrid(res_plotted, person_results, face_results, smoking_model)
+
+    elif system_state.DETECTION_MODE == 'violence_detection':
+        # 暴力检测仅支持视频
+        return {"status": "error", "message": "暴力检测仅支持视频文件"}, 400
+
+    else:
+        # Default execution path must also use a fresh, local instance
+        model_local = YOLO(OBJECT_MODEL_PATH)
+        detections = model_local.predict(img)
+        res_plotted = detections[0].plot()
+        
+        # Draw danger zone overlay on the plotted results
+        # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+        danger_zone_pts = np.array(danger_zone_service.DANGER_ZONE).reshape((-1, 1, 2))
+        overlay = res_plotted.copy()
+        cv2.fillPoly(overlay, [danger_zone_pts], (0, 0, 255))
+        cv2.addWeighted(overlay, 0.4, res_plotted, 0.6, 0, res_plotted)
+        cv2.polylines(res_plotted, [danger_zone_pts], True, (0, 0, 255), 3)
+
     # 保存处理后的图像
     output_filename = 'processed_' + os.path.basename(filepath)
     output_path = os.path.join(uploads_dir, output_filename)
@@ -143,8 +206,12 @@ def process_video(filepath, uploads_dir):
         out = cv2.VideoWriter(output_path.replace(".mp4", ".avi"), fourcc, fps, (frame_width, frame_height))
         output_filename = output_filename.replace(".mp4", ".avi")
     
-    # 初始化YOLOv8模型
-    model = get_model()
+    # 初始化此视频处理任务专用的YOLOv8模型
+    # 避免在多个后台任务中共享模型实例及其追踪器状态
+    object_model_local = YOLO(OBJECT_MODEL_PATH)
+    pose_model_local = YOLO(POSE_MODEL_PATH)
+    face_model_local = YOLO(FACE_MODEL_PATH)
+    # smoking_model_local = get_smoking_model() # BUG-FIX: 改为按需加载，避免影响其他功能
     
     # 为本次视频处理创建一个新的人脸识别缓存
     face_recognition_cache = {}
@@ -167,40 +234,61 @@ def process_video(filepath, uploads_dir):
         # 计算时间差
         time_diff = update_detection_time()
         
+        # --- V5: 每次处理前都从文件重新加载最新的配置 ---
+        danger_zone_service.load_config()
+        
         # --- 检测模式处理 ---
         processed_frame = frame.copy() # 复制一份用于处理
 
         # 根据当前模式决定处理方式
         if system_state.DETECTION_MODE == 'object_detection':
             # 执行目标追踪
-            results = get_object_model().track(processed_frame, persist=True)
+            results = object_model_local.track(processed_frame, persist=True)
             
-            # --- 绘图顺序调整 ---
-            # 1. 首先，绘制危险区域的半透明叠加层作为背景
-            overlay = processed_frame.copy()
-            danger_zone_pts = DANGER_ZONE.reshape((-1, 1, 2))
-            cv2.fillPoly(overlay, [danger_zone_pts], (0, 0, 255))
-            cv2.addWeighted(overlay, 0.4, processed_frame, 0.6, 0, processed_frame)
-            cv2.polylines(processed_frame, [danger_zone_pts], True, (0, 0, 255), 3)
+            # --- V3 混合驱动：仅在非编辑模式下由后端绘制 ---
+            if not config_state.edit_mode:
+                # 1. 首先，绘制危险区域的半透明叠加层作为背景
+                overlay = processed_frame.copy()
+                # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+                danger_zone_pts = np.array(danger_zone_service.DANGER_ZONE).reshape((-1, 1, 2))
+                # 使用更醒目的颜色
+                cv2.fillPoly(overlay, [danger_zone_pts], (0, 255, 255)) # 黄色填充
+                cv2.addWeighted(overlay, 0.4, processed_frame, 0.6, 0, processed_frame)
+                cv2.polylines(processed_frame, [danger_zone_pts], True, (0, 255, 255), 3) # 黄色边框
             
-            # 在危险区域中添加文字
-            danger_zone_center = np.mean(DANGER_ZONE, axis=0, dtype=np.int32)
-            cv2.putText(processed_frame, "Danger Zone", 
-                        (danger_zone_center[0] - 60, danger_zone_center[1]),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+                # 在危险区域中添加文字
+                # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+                danger_zone_center = np.mean(danger_zone_service.DANGER_ZONE, axis=0, dtype=np.int32)
+                cv2.putText(processed_frame, "Danger Zone", 
+                            (danger_zone_center[0] - 60, danger_zone_center[1]),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
             
-            # 2. 然后，在已经有了危险区域的帧上，处理检测结果（绘制追踪框、标签等前景）
+            # 2. 然后，处理检测结果（绘制追踪框、标签等前景）
             process_object_detection_results(results, processed_frame, time_diff, frame_count)
         
         elif system_state.DETECTION_MODE == 'fall_detection':
             # 执行姿态估计追踪
-            pose_results = get_pose_model().track(processed_frame, persist=True)
+            pose_results = pose_model_local.track(processed_frame, persist=True)
             process_pose_estimation_results(pose_results, processed_frame, time_diff, frame_count)
 
         elif system_state.DETECTION_MODE == 'face_only':
             # 优化：传入人脸识别缓存以保存状态
+            # 确保人脸模型被正确地传递给处理函数
+            if 'face_model' not in face_recognition_cache:
+                face_recognition_cache['face_model'] = face_model_local
             process_faces_only(processed_frame, frame_count, face_recognition_cache)
-
+        
+        elif system_state.DETECTION_MODE == 'smoking_detection':
+            # --- FIX: Use the local instances created for this specific video task ---
+            face_results = face_model_local.predict(processed_frame, verbose=False)
+            person_results = object_model_local.track(processed_frame, persist=True, classes=[0], verbose=False)
+            process_smoking_detection_hybrid(
+                processed_frame, person_results, face_results, get_smoking_model()
+            )
+        
+        elif system_state.DETECTION_MODE == 'violence_detection':
+            return process_violence_detection(filepath, uploads_dir)
+            
         # 写入处理后的帧到输出视频
         # 确保帧是BGR格式，这是OpenCV的标准格式
         if processed_frame is not None:
@@ -230,11 +318,89 @@ def process_video(filepath, uploads_dir):
         "alerts": get_alerts()
     }
 
+
+def process_smoking_detection_hybrid(frame, person_results, face_results, smoking_model):
+    """
+    Refactored hybrid detection to avoid tracker state conflicts.
+    This function now receives pre-computed detection results.
+    """
+    frame_h, frame_w = frame.shape[:2]
+
+    person_boxes = person_results[0].boxes.xyxy.cpu().numpy().astype(int) if hasattr(person_results[0].boxes, 'xyxy') else []
+    face_boxes = face_results[0].boxes.xyxy.cpu().numpy().astype(int) if hasattr(face_results[0].boxes, 'xyxy') else []
+
+    processed_person_indices = set()
+
+    # High-confidence channel
+    for f_box in face_boxes:
+        fx1, fy1, fx2, fy2 = f_box
+        face_w, face_h = fx2 - fx1, fy2 - fy1
+        face_center_x = fx1 + face_w // 2
+
+        for i, p_box in enumerate(person_boxes):
+            if i in processed_person_indices:
+                continue
+            px1, _, px2, _ = p_box
+            if px1 < face_center_x < px2:
+                roi_x1 = max(0, fx1 - face_w // 2)
+                roi_y1 = max(0, fy1 - face_h // 2)
+                roi_x2 = min(frame_w, fx2 + face_w // 2)
+                roi_y2 = min(frame_h, fy2 + face_h)
+                
+                roi_crop = frame[roi_y1:roi_y2, roi_x1:roi_x2]
+                if roi_crop.size == 0: continue
+
+                smoking_results = smoking_model.predict(roi_crop, imgsz=640, verbose=False)
+                if len(smoking_results[0].boxes) > 0:
+                    add_alert("Smoking Detected (High-Confidence)")
+                    for s_box in smoking_results[0].boxes:
+                        s_xyxy = s_box.xyxy.cpu().numpy().astype(int)[0]
+                        abs_x1, abs_y1 = s_xyxy[0] + roi_x1, s_xyxy[1] + roi_y1
+                        abs_x2, abs_y2 = s_xyxy[2] + roi_x1, s_xyxy[3] + roi_y1
+                        cv2.rectangle(frame, (abs_x1, abs_y1), (abs_x2, abs_y2), (0, 0, 255), 2)
+                        cv2.putText(frame, "Smoking", (abs_x1, abs_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                
+                processed_person_indices.add(i)
+                break
+
+    # Low-confidence channel
+    for i, p_box in enumerate(person_boxes):
+        if i in processed_person_indices:
+            continue
+
+        px1, py1, px2, py2 = p_box
+        upper_body_y2 = py1 + int((py2 - py1) * 0.6)
+        upper_body_crop = frame[py1:upper_body_y2, px1:px2]
+        if upper_body_crop.size == 0: continue
+
+        smoking_results = smoking_model.predict(upper_body_crop, imgsz=1024, verbose=False)
+        if len(smoking_results[0].boxes) > 0:
+            add_alert("Smoking Detected (Low-Confidence/Distant)")
+            for s_box in smoking_results[0].boxes:
+                s_xyxy = s_box.xyxy.cpu().numpy().astype(int)[0]
+                abs_x1, abs_y1 = s_xyxy[0] + px1, s_xyxy[1] + py1
+                abs_x2, abs_y2 = s_xyxy[2] + px1, s_xyxy[3] + py1
+                cv2.rectangle(frame, (abs_x1, abs_y1), (abs_x2, abs_y2), (0, 165, 255), 2)
+                cv2.putText(frame, "Smoking?", (abs_x1, abs_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+
+    return frame
+
+
 def process_object_detection_results(results, frame, time_diff, frame_count):
     """
     处理通用目标检测结果（危险区域、徘徊等）
     (这是您之前的 process_detection_results 函数，已重命名并保留)
     """
+    # --- V3 混合驱动：在编辑模式下，跳过所有危险区域的闯入/靠近检测逻辑 ---
+    if config_state.edit_mode:
+        # 仍然需要绘制检测框，所以我们只跳过危险区域的部分
+        if results and results[0].boxes is not None and hasattr(results[0].boxes, 'id') and results[0].boxes.id is not None:
+            boxes = results[0].boxes.cpu().numpy()
+            # 绘制YOLOv8的默认结果（框和ID）
+            frame[:] = results[0].plot()
+        return # 直接返回，不执行后续的危险区域判断
+    # --- 结束新增 ---
+
     # 如果有追踪结果，在画面上显示追踪ID和危险区域告警
     if hasattr(results[0], 'boxes') and hasattr(results[0].boxes, 'id') and results[0].boxes.id is not None:
         boxes = results[0].boxes.xyxy.cpu().numpy()
@@ -257,10 +423,12 @@ def process_object_detection_results(results, frame, time_diff, frame_count):
             foot_point = (int((x1 + x2) / 2), int(y2))
             
             # 检查是否在危险区域内
-            in_danger_zone = point_in_polygon(foot_point, DANGER_ZONE)
+            # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+            in_danger_zone = point_in_polygon(foot_point, danger_zone_service.DANGER_ZONE)
             
             # 计算到危险区域的距离
-            distance = distance_to_polygon(foot_point, DANGER_ZONE)
+            # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+            distance = distance_to_polygon(foot_point, danger_zone_service.DANGER_ZONE)
             
             # 确定标签颜色和告警状态
             label_color = (0, 255, 0)  # 默认绿色
@@ -426,64 +594,71 @@ def process_pose_estimation_results(results, frame, time_diff, frame_count):
 process_detection_results = process_object_detection_results
 
 
-def process_faces_only(frame, frame_count, face_mode_state):
-    """
-    专门处理纯人脸识别模式的函数（优化版）
-    
-    参数:
-        frame: 当前视频帧
-        frame_count: 当前的帧数
-        face_mode_state: 用于在帧之间保持状态的字典
-    """
-    # 每3帧处理一次，以提高性能
-    if frame_count % 3 == 0:
-        # 缩小图像以加快检测速度
-        small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
-        # 将图像从BGR（OpenCV格式）转换为RGB（face_recognition格式）
-        rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-        
-        # 查找帧中的所有人脸
-        face_locations = face_recognition.face_locations(rgb_small_frame)
-        face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
+# --- 新的、带结果黏滞和多线程优化的高频人脸识别逻辑 ---
 
-        current_faces = []
-        for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
-            # 识别人脸
-            name, distance = face_service.identify_face(face_encoding)
-            
-            # 因为我们缩小了图像，需要将坐标转换回原始尺寸
-            top *= 2
-            right *= 2
-            bottom *= 2
-            left *= 2
-            current_faces.append({"box": (top, right, bottom, left), "name": name})
-        
-        # 更新状态
-        face_mode_state['last_results'] = current_faces
-    
-    # 在每一帧都绘制最后一次的检测结果
-    if 'last_results' in face_mode_state:
-        for face_info in face_mode_state['last_results']:
-            box = face_info['box']
-            name = face_info['name']
-            (top, right, bottom, left) = box
-            
-            display_name = "Stranger"
-            label_color = (0, 0, 255) # 默认为陌生人红色
-            if name != "Unknown":
-                display_name = name
-                label_color = (0, 255, 0) # 识别成功为绿色
+def process_faces_only(frame, frame_count, state):
+    """
+    只进行人脸检测和识别的处理。
+    使用 YOLOv8 进行检测，使用 Dlib 进行识别。
+    这个函数现在直接在传入的 frame 上绘图，不再返回新的 frame。
+    """
+    face_model_local = state.get('face_model')
+    if face_model_local is None:
+        face_model_local = YOLO(FACE_MODEL_PATH)
+        state['face_model'] = face_model_local
 
-            # 绘制边框
-            cv2.rectangle(frame, (left, top), (right, bottom), label_color, 2)
-            
-            # 绘制标签背景
-            (w, h), _ = cv2.getTextSize(display_name, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-            cv2.rectangle(frame, (left, bottom - h - 10), (left + w, bottom), label_color, -1)
-            
-            # 绘制标签文本
-            cv2.putText(frame, display_name, (left, bottom - 5), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    # --- 性能诊断：步骤1 ---
+    t0 = time.time()
+    # 使用 YOLOv8 进行人脸检测
+    # 修复：对于可能为静态图的场景，使用 .predict() 而不是 .track()
+    face_results = face_model_local.predict(frame, verbose=False)
+    t1 = time.time()
+    
+    # 从结果中提取边界框
+    boxes = [box.xyxy[0].tolist() for box in face_results[0].boxes] # 获取所有检测框
+    
+    # 如果没有检测到人脸，直接返回
+    if not boxes:
+        return
+        
+    # --- 性能诊断：步骤2 ---
+    t2 = time.time()
+    # 将边界框传递给 Dlib 服务进行识别
+    recognized_faces = dlib_face_service.identify_faces(frame, boxes)
+    t3 = time.time()
+
+    # --- 打印诊断日志 ---
+    print(f"DIAGNOSTICS - YOLO Detection: {t1-t0:.4f}s, Dlib Recognition: {t3-t2:.4f}s")
+    
+    # 3. 在帧上绘制结果
+    for name, box in recognized_faces:
+        # 双重保险：再次确保坐标是整数
+        left, top, right, bottom = [int(p) for p in box]
+        color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
+                
+        # 绘制边界框
+        cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
+        
+        # 准备绘制名字的文本
+        label = f"{name}"
+        
+        (label_width, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        
+        # --- 智能定位标签位置 ---
+        label_bg_height = 20 # 标签背景的高度
+        
+        # 判断标签应该放在框内还是框外
+        if top - label_bg_height < 5: # 增加一个5像素的边距
+            # 空间不足，放在内部
+            cv2.rectangle(frame, (left, top), (left + label_width + 4, top + label_bg_height), color, -1)
+            cv2.putText(frame, label, (left + 2, top + label_bg_height - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        else:
+            # 空间充足，放在外部
+            cv2.rectangle(frame, (left, top - label_bg_height), (left + label_width + 4, top), color, -1)
+            cv2.putText(frame, label, (left + 2, top - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+    # 不再返回 frame，因为是直接在原图上修改
+    # return frame
 
 
 def draw_distance_line(frame, foot_point, distance):
@@ -498,9 +673,10 @@ def draw_distance_line(frame, foot_point, distance):
     # 找到危险区域上最近的点
     min_dist = float('inf')
     closest_point = None
-    for i in range(len(DANGER_ZONE)):
-        p1 = DANGER_ZONE[i]
-        p2 = DANGER_ZONE[(i + 1) % len(DANGER_ZONE)]
+    # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+    for i in range(len(danger_zone_service.DANGER_ZONE)):
+        p1 = danger_zone_service.DANGER_ZONE[i]
+        p2 = danger_zone_service.DANGER_ZONE[(i + 1) % len(danger_zone_service.DANGER_ZONE)]
         
         # 计算点到线段的最近点
         line_vec = p2 - p1
@@ -552,3 +728,41 @@ def draw_distance_line(frame, foot_point, distance):
                     start_point = tuple(map(int, start_point))
                     end_point = tuple(map(int, end_point))
                     cv2.line(frame, start_point, end_point, (0, 0, 255), line_thickness + 1) 
+
+
+def process_violence_detection(filepath, uploads_dir):
+    """
+    使用 violenceDetect.py 进行暴力检测，处理视频并输出结果视频和警报。
+    """
+    import os
+    model_path = os.path.join(os.path.dirname(__file__), 'vd.hdf5')
+    try:
+        violence_prob, non_violence_prob = violenceDetect.predict_video(filepath, model_path=model_path)
+    except Exception as e:
+        return {"status": "error", "message": f"暴力检测失败: {str(e)}"}, 500
+
+    # 生成输出视频文件名（此处直接复制原视频，或可扩展为标注结果视频）
+    output_filename = 'processed_' + os.path.basename(filepath)
+    output_path = os.path.join(uploads_dir, output_filename)
+    if not os.path.exists(output_path):
+        import shutil
+        shutil.copy(filepath, output_path)
+    output_url = f"/api/files/{output_filename}"
+
+    # 生成警报信息
+    alerts = []
+    if violence_prob > 0.7:
+        alerts.append("warning: 检测到高概率暴力行为!")
+    elif violence_prob > 0.5:
+        alerts.append("caution: 检测到可能的暴力行为")
+    else:
+        alerts.append("safe: 未检测到明显暴力行为")
+
+    return {
+        "status": "success",
+        "media_type": "video",
+        "file_url": output_url,
+        "alerts": alerts,
+        "violenceProbability": float(violence_prob),
+        "nonViolenceProbability": float(non_violence_prob)
+    } 
