@@ -20,7 +20,7 @@ const router = createRouter({
     {
       path: '/face',
       name: 'face',
-      component: () => import('../views/FaceRecognition.vue')
+      component: () => import('../views/FaceView.vue')
     },
     {
       path: '/monitor',

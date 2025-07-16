@@ -5,11 +5,13 @@ from flask_jwt_extended import JWTManager
 from flask_bcrypt import Bcrypt
 from flask import jsonify  
 from flask_sqlalchemy import SQLAlchemy 
+from flask_socketio import SocketIO # 引入 SocketIO
 import os
 
 db = SQLAlchemy()
 bcrypt = Bcrypt()
 jwt = JWTManager()
+socketio = SocketIO() # 创建 SocketIO 实例
 
 def create_app():
 
@@ -19,6 +21,7 @@ def create_app():
     app = Flask(__name__)
     CORS(app)  # 启用跨域支持
     swagger = Swagger(app) # 初始化 Flasgger
+    socketio.init_app(app, cors_allowed_origins="*") # 初始化 SocketIO 并处理跨域
     
     app.config.from_object('app.config.Config')
 
@@ -35,19 +38,21 @@ def create_app():
     from app.routes.api import api_bp
     from app.routes.video import video_bp
     from app.routes.config import config_bp
-    from app.routes.face import face_bp
     from app.routes.auth import auth_bp 
+    from app.routes.dlib_routes import dlib_bp # 导入新的 Dlib 蓝图
     # 在蓝图导入部分添加
-    from app.routes.main import main_bp  # 添加这行
-
+    from app.routes.rtmp_routes import rtmp_bp  # 添加这行
+    from app.routes.main import main_bp  # 添加这行导入 main_bp
+    
     # 在蓝图注册部分添加
+    app.register_blueprint(rtmp_bp)  # 添加这行
     app.register_blueprint(main_bp)  # 添加这行
 
     app.register_blueprint(api_bp)
     app.register_blueprint(video_bp)
     app.register_blueprint(config_bp)
-    app.register_blueprint(face_bp)
     app.register_blueprint(auth_bp)
+    app.register_blueprint(dlib_bp) # 注册 Dlib 蓝图
     
     add_jwt_handlers(jwt)
     

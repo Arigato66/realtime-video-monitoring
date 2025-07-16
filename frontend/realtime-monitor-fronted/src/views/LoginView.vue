@@ -6,8 +6,8 @@
       <h1>登录</h1>
       <form @submit.prevent="handleLogin">
         <div class="form-group">
-          <label for="email">用户名</label>
-          <input id="email" type="email" v-model="email" required placeholder="请输入邮箱" />
+          <label for="username">用户名</label>
+          <input id="username" type="text" v-model="username" required placeholder="请输入用户名" />
         </div>
         <div class="form-group">
           <label for="password">密码</label>
@@ -48,7 +48,7 @@ import * as THREE from "three"
 import WAVES from "vanta/dist/vanta.waves.min"
 import { useAuthStore } from '@/stores/auth'
 
-const email = ref('admin@qq.com')
+const username = ref('admin')
 const password = ref('123')
 const router = useRouter()
 const isShow = ref(false)
@@ -67,10 +67,17 @@ const handleLogin = async () => {
   }
   // 组装登录参数（与后端接口字段匹配）
   const credentials = {
-    username: email.value,  // 如果你后端用username登录，就传这个；如果用email，改为email: email.value
+    username: username.value,  // 如果你后端用username登录，就传这个；如果用username，改为username: username.value
     password: password.value
   }
-    try {
+
+  // 关键：打印前端即将发送的用户名和密码（开发环境调试用）
+  console.log('前端登录参数：', {
+    username: credentials.username,
+    password: credentials.password // 注意：生产环境必须删除密码打印
+  })
+
+  try {
     // 调用Pinia中的登录方法
     const loginSuccess = await authStore.login(credentials)
     if (loginSuccess) {
