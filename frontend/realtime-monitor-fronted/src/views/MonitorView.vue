@@ -203,11 +203,13 @@ const apiFetch = async (endpoint, options = {}) => {
 // --- 检测模式管理 ---
 const loadDetectionMode = async () => {
   try {
-    const data = await apiFetch('/detection_mode');
-    detectionMode.value = data.mode;
-    console.log('Detection mode loaded:', data.mode);
+ // 直接使用配置了拦截器的api实例
+    const response = await api.get('/detection_mode');
+    detectionMode.value = response.data.mode;
+    console.log('Detection mode loaded:', response.data.mode);
   } catch (error) {
-    // apiFetch中已处理错误
+    console.error('获取检测模式失败:', error);
+    // 错误会被响应拦截器捕获并处理（自动登出或提示）
   }
 };
 

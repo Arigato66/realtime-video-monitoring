@@ -4,7 +4,7 @@ from app.services.user_service import create_user, verify_user
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/v1.0')
 
-@auth_bp.route('/signin', methods=['POST'])
+@auth_bp.route('/signin', methods=['POST','OPTIONS'])
 def register():
     """用户注册端点
     ---
@@ -50,6 +50,11 @@ def register():
       500:
         description: 服务器内部错误
     """
+
+      # 优先处理OPTIONS预检请求
+    if request.method == 'OPTIONS':
+        return '', 204  # 返回204状态码（预检请求成功的标准响应）
+
     data = request.get_json()
     # 验证必填字段
     required_fields = ['username', 'password', 'email']
@@ -63,7 +68,8 @@ def register():
     )
     return jsonify(result), status_code
 
-@auth_bp.route('/login', methods=['POST'])
+
+@auth_bp.route('/login', methods=['POST', 'OPTIONS'])  # 同时添加OPTIONS方法
 def login():
     """用户登录端点
     ---
@@ -104,6 +110,11 @@ def login():
               type: string
               example: 用户名或密码错误
     """
+
+      # 处理OPTIONS预检请求（直接返回空响应）
+    if request.method == "OPTIONS":
+        return "", 204
+
     data = request.get_json()
     # 验证必填字段
     required_fields = ['username', 'password']

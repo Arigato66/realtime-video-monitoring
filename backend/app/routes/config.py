@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 import numpy as np
-
+from flask_jwt_extended import jwt_required
 from app.services import system_state
 from app.services.danger_zone import (
     DANGER_ZONE, SAFETY_DISTANCE, LOITERING_THRESHOLD,
@@ -14,6 +14,7 @@ config_bp = Blueprint('config', __name__, url_prefix='/api')
 edit_mode = False
 
 @config_bp.route("/config", methods=["GET"])
+
 def get_config():
     """获取配置信息端点
     ---
@@ -46,6 +47,7 @@ def get_config():
     })
 
 @config_bp.route("/update_danger_zone", methods=["POST"])
+
 def update_danger_zone():
     """更新危险区域坐标端点
     ---
@@ -86,6 +88,7 @@ def update_danger_zone():
         return jsonify({"status": "error", "message": "Invalid danger zone coordinates"}), 400
 
 @config_bp.route("/update_thresholds", methods=["POST"])
+
 def update_thresholds():
     """更新安全距离和停留时间阈值端点
     ---
@@ -145,6 +148,7 @@ def update_thresholds():
         })
 
 @config_bp.route("/toggle_edit_mode", methods=["POST"])
+
 def toggle_edit_mode():
     """切换危险区域编辑模式端点
     ---
@@ -181,6 +185,7 @@ def toggle_edit_mode():
     return jsonify({"status": "success", "edit_mode": edit_mode}) 
 
 @config_bp.route("/detection_mode", methods=["GET", "POST"])
+
 def detection_mode():
     """获取或设置检测模式
     ---
