@@ -4,7 +4,8 @@ import numpy as np
 from app.services import system_state
 from app.services.danger_zone import (
     DANGER_ZONE, SAFETY_DISTANCE, LOITERING_THRESHOLD,
-    save_danger_zone_config
+    update_danger_zone as save_danger_zone,  # 使用别名以减少代码改动
+    update_thresholds as save_thresholds
 )
 
 # 创建配置蓝图
@@ -77,11 +78,9 @@ def update_danger_zone():
     
     if new_zone and len(new_zone) >= 3:  # 确保至少有3个点形成多边形
         DANGER_ZONE = np.array(new_zone, np.int32)
-        # 保存到配置文件
-        if save_danger_zone_config(DANGER_ZONE, SAFETY_DISTANCE, LOITERING_THRESHOLD):
-            return jsonify({"status": "success", "message": "Danger zone updated and saved successfully"})
-        else:
-            return jsonify({"status": "warning", "message": "Danger zone updated but failed to save to file"})
+        # V5: 使用新的服务函数保存配置
+        save_danger_zone(DANGER_ZONE)
+        return jsonify({"status": "success", "message": "Danger zone updated and saved successfully"})
     else:
         return jsonify({"status": "error", "message": "Invalid danger zone coordinates"}), 400
 
@@ -128,21 +127,14 @@ def update_thresholds():
         except ValueError:
             return jsonify({"status": "error", "message": "Invalid loitering threshold value"}), 400
     
-    # 保存到配置文件
-    if save_danger_zone_config(DANGER_ZONE, SAFETY_DISTANCE, LOITERING_THRESHOLD):
-        return jsonify({
-            "status": "success", 
-            "message": "Thresholds updated and saved successfully",
-            "safety_distance": SAFETY_DISTANCE,
-            "loitering_threshold": LOITERING_THRESHOLD
-        })
-    else:
-        return jsonify({
-            "status": "warning", 
-            "message": "Thresholds updated but failed to save to file",
-            "safety_distance": SAFETY_DISTANCE,
-            "loitering_threshold": LOITERING_THRESHOLD
-        })
+    # V5: 使用新的服务函数保存配置
+    save_thresholds(SAFETY_DISTANCE, LOITERING_THRESHOLD)
+    return jsonify({
+        "status": "success", 
+        "message": "Thresholds updated and saved successfully",
+        "safety_distance": SAFETY_DISTANCE,
+        "loitering_threshold": LOITERING_THRESHOLD
+    })
 
 @config_bp.route("/toggle_edit_mode", methods=["POST"])
 def toggle_edit_mode():
@@ -198,7 +190,7 @@ def detection_mode():
             properties:
                 mode:
                     type: string
-                    enum: ['object_detection', 'face_only', 'fall_detection']
+                    enum: ['object_detection', 'face_only', 'fall_detection', 'smoking_detection']
                     description: 要设置的新模式。
     responses:
         200:
@@ -209,7 +201,7 @@ def detection_mode():
     if request.method == "POST":
         data = request.json
         mode = data.get('mode')
-        if mode in ['object_detection', 'face_only', 'fall_detection']:
+        if mode in ['object_detection', 'face_only', 'fall_detection', 'smoking_detection', 'violence_detection']:
             system_state.DETECTION_MODE = mode
             print(f"检测模式已切换为: {system_state.DETECTION_MODE}")
             return jsonify({"status": "success", "message": f"Detection mode set to {mode}"})

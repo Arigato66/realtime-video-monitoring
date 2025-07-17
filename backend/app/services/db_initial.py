@@ -1,24 +1,36 @@
 import mysql.connector
-from app.config import Config
+from app.config import config
 import uuid
-from werkzeug.security import generate_password_hash  # 导入密码哈希工具
-
+from werkzeug.security import generate_password_hash
+import os
 
 def init_database():
     """初始化数据库和表结构"""
     try:
-        # 创建数据库连接
-        conn = mysql.connector.connect(
-            host=Config.MYSQL_HOST,
-            port=Config.MYSQL_PORT,
-            user=Config.MYSQL_USER,
-            password=Config.MYSQL_PASSWORD
-        )
-        cursor = conn.cursor()
+        # 获取当前环境配置
+        config_name = os.environ.get('FLASK_CONFIG', 'development')
+        current_config = config[config_name]()
         
-        # 创建数据库（如果不存在）
-        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {Config.MYSQL_DB} DEFAULT CHARSET {Config.MYSQL_CHARSET}")
-        cursor.execute(f"USE {Config.MYSQL_DB}")
+        # 检查是否为生产环境或云环境（修改这里）
+        if config_name in ['production', 'cloud']:
+            # 创建数据库连接
+            conn = mysql.connector.connect(
+                host=current_config.MYSQL_HOST,
+                port=current_config.MYSQL_PORT,
+                user=current_config.MYSQL_USER,
+                password=current_config.MYSQL_PASSWORD
+            )
+            cursor = conn.cursor()
+            
+            # 创建数据库（如果不存在）
+            cursor.execute(f"CREATE DATABASE IF NOT EXISTS {current_config.MYSQL_DB} DEFAULT CHARSET {current_config.MYSQL_CHARSET}")
+            cursor.execute(f"USE {current_config.MYSQL_DB}")
+            
+            print(f"✅ 连接到MySQL数据库: {current_config.MYSQL_DB}")
+            print(f"✅ 当前环境: {config_name}")
+        else:
+            print("ℹ️  开发环境使用SQLite数据库，无需初始化MySQL")
+            return
         
         # 创建车站信息表
         cursor.execute("""
@@ -72,6 +84,7 @@ def init_database():
             registration_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '注册时间',
             blacklist_flag BOOLEAN NOT NULL DEFAULT FALSE COMMENT '是否在黑名单中',
             blacklist_reason TEXT COMMENT '加入黑名单的原因',
+            image_path VARCHAR(255) COMMENT '注册人脸的图像文件路径',
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间'
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
@@ -156,8 +169,6 @@ def init_database():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
 
-
-       
         # 创建系统日志表
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS system_logs (
@@ -176,7 +187,7 @@ def init_database():
         CREATE TABLE IF NOT EXISTS users (
             user_id VARCHAR(36) NOT NULL PRIMARY KEY COMMENT '用户唯一标识符(UUID)',
             username VARCHAR(50) NOT NULL UNIQUE COMMENT '用户名',
-            password VARCHAR(255) NOT NULL COMMENT '密码哈希值',  -- 存储哈希后的密码
+            password VARCHAR(255) NOT NULL COMMENT '密码哈希值',
             email VARCHAR(100) NOT NULL UNIQUE COMMENT '邮箱',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
             last_login TIMESTAMP NULL COMMENT '最后登录时间',
@@ -184,40 +195,33 @@ def init_database():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
 
-
         print("✅ 数据库表创建成功!")
-       
+        
+        # 检查并创建默认管理员用户
         check_query = "SELECT COUNT(*) FROM users WHERE username = 'admin'"
         cursor.execute(check_query)
         count = cursor.fetchone()[0]
 
         if count == 0:
-            # 生成UUID作为user_id
             admin_user_id = str(uuid.uuid4())
             hashed_password = generate_password_hash('123')
             
             insert_query = """
-            INSERT INTO users (
-                user_id, username, password, email, created_at, last_login, is_active
-            ) VALUES (
-                %s, 'admin', %s, 'admin@qq.com', 
-                '2025-07-11 11:39:32', '2025-07-11 03:40:23', 1
-            )
+            INSERT INTO users (user_id, username, password, email, is_active)
+            VALUES (%s, %s, %s, %s, %s)
             """
-            cursor.execute(insert_query, (admin_user_id, hashed_password))
+            cursor.execute(insert_query, (admin_user_id, 'admin', hashed_password, 'admin@example.com', True))
             conn.commit()
-            print(f"✅ 管理员用户插入成功 (ID: {admin_user_id})")
+            print("✅ 默认管理员用户创建成功 (用户名: admin, 密码: 123)")
         else:
-            print("ℹ️ 管理员用户已存在，跳过插入")
-
-        return True
-
-
+            print("ℹ️  管理员用户已存在")
+            
+        cursor.close()
+        conn.close()
         
-    except mysql.connector.Error as err:
-        print(f"❌ 数据库初始化失败: {err}")
-        return False
-    finally:
-        if 'conn' in locals() and conn.is_connected():
-            cursor.close()
-            conn.close()
+    except mysql.connector.Error as e:
+        print(f"❌ 数据库初始化失败: {e}")
+        raise
+    except Exception as e:
+        print(f"❌ 初始化过程中发生错误: {e}")
+        raise

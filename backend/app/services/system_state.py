@@ -1,1 +1,1 @@
-DETECTION_MODE = "object_detection"  # 可选值: 'object_detection', 'face_only' 
+DETECTION_MODE = "object_detection"  # 可选值: 'object_detection', 'face_only', 'fall_detection', 'smoking_detection', 'violence_detection' 

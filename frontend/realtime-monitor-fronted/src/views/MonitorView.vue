@@ -24,9 +24,9 @@
           <span>{{ detectionModeText }}</span>
         </div>
       </div>
-    </header>
+    </div>
 
-    <!-- 新增：人脸注册模态框 -->
+    <!-- 人脸注册模态框 -->
     <div v-if="showRegistrationModal" class="registration-modal-overlay">
       <div class="registration-modal-content">
         <h2>正在为 "{{ registrationName }}" 注册人脸</h2>
@@ -44,7 +44,7 @@
       </div>
     </div>
 
-    <!-- 新增：RTMP流连接模态框 -->
+    <!-- RTMP流连接模态框 -->
     <div v-if="showRtmpConnectionModal" class="rtmp-modal-overlay">
       <div class="rtmp-modal-content">
         <h2>RTMP流连接配置</h2>
@@ -93,258 +93,479 @@
       </div>
     </div>
 
-    <div class="main-content">
-      <!-- 引入复用的侧边栏组件 -->
-      <Sidebar :currentPath="currentPath" />
-
-      <!-- 主内容区域 - 实时视频监控系统内容 -->
-      <main class="content-area">
-        <div class="monitor-page">
-          <h1>实时视频监控系统</h1>
-          
-          <div class="monitor-container">
-            <div class="video-container">
-              <h2>监控视图</h2>
-              <div class="video-wrapper">
-
-                <!-- V3: 统一的图像显示，使用 ref 来引用 -->
-                <img 
-                  v-if="activeSource === 'webcam' || activeSource === 'rtmp' || (activeSource === 'upload' && isImageUrl(videoSource))"
-                  ref="displayImage"
-                  :src="videoSource" 
-                  alt="实时或上传画面" 
-                  class="webcam-feed"
-                  @load="onImageLoad"
-                />
-
-                <!-- 上传的视频 -->
-                <video 
-                  v-else-if="activeSource === 'upload' && isVideoUrl(videoSource)" 
-                  :src="videoSource" 
-                  controls 
-                  autoplay
-                ></video>
-
-                <!-- 加载状态 -->
-          <div v-else-if="activeSource === 'loading'" class="loading-state">
-            <p>正在处理文件，请稍候...</p>
-            <div class="loading-spinner"></div>
-          </div>
-          
-                <!-- 默认占位符 -->
-          <div v-else class="video-placeholder">
-            <p>加载中或未连接视频源</p>
-          </div>
-  
-                <!-- V3: 用于危险区域交互的Canvas，仅在编辑模式下显示 -->
-                <canvas
-                  v-if="editMode"
-                  ref="interactionCanvas"
-                  class="interaction-canvas"
-                  @mousedown="handleMouseDown"
-                  @mousemove="handleMouseMove"
-                  @mouseup="handleMouseUp"
-                  @mouseleave="handleMouseLeave"
-                  @dblclick="handleDoubleClick"
-                  @contextmenu.prevent="handleRightClick"
-                ></canvas>
-        </div>
-      </div>
-      
-            <div class="control-panel">
-              <h2>控制面板</h2>
-              
-              <!-- 视频源选择 -->
-
-              <div class="control-section">
-                <h3>视频源</h3>
-                <div class="button-group">
-                  <button @click="connectWebcam" :class="{ active: activeSource === 'webcam' }">开启摄像头</button>
-                  <button @click="disconnectWebcam" v-if="activeSource === 'webcam'" class="disconnect-button">关闭摄像头</button>
-                  <button @click="uploadVideoFile" :disabled="activeSource === 'webcam'">上传视频</button>
-
-                  <!-- 新增RTMP流连接按钮 -->
-                  <button @click="showRtmpModal" :disabled="activeSource === 'webcam'" class="rtmp-button">RTMP流连接</button>
-
+    <!-- 视频区域 -->
+    <div class="video-container" :class="{ 'sidebar-visible': isSidebarOpen }">
+      <div class="video-wrapper">
+        <div class="video-content">
+          <transition name="video-fade" mode="out-in">
+            <!-- 摄像头实时画面 / RTMP流显示 / 上传文件 (图像) -->
+            <div v-if="activeSource === 'webcam' || activeSource === 'rtmp' || (activeSource === 'upload' && isImageUrl(videoSource))" key="image-feed" class="video-frame">
+              <img ref="displayImage" :src="videoSource" alt="实时画面" class="webcam-feed" @load="onImageLoad" />
+              <div class="video-overlay">
+                <div class="recording-indicator">
+                  <div class="recording-dot"></div>
+                  <span>{{ activeSource === 'rtmp' ? 'RTMP流' : '监控中' }}</span>
                 </div>
-                <!-- The hidden file input is no longer needed here -->
-              </div>
-
-              <!-- 检测模式选择 -->
-              <div class="control-section">
-                <h3>检测模式</h3>
-                <div class="button-group">
-                  <button 
-                    @click="setDetectionMode('object_detection')" 
-                    :class="{ active: detectionMode === 'object_detection' }">
-                    目标检测
-                  </button>
-                  <button 
-                    @click="setDetectionMode('face_only')" 
-                    :class="{ active: detectionMode === 'face_only' }">
-                    纯人脸识别
-                  </button>
-                  <button 
-                    @click="setDetectionMode('fall_detection')" 
-                    :class="{ active: detectionMode === 'fall_detection' }">
-                    跌倒检测
-                  </button>
-                  <button 
-                    @click="setDetectionMode('smoking_detection')" 
-                    :class="{ active: detectionMode === 'smoking_detection' }">
-                    抽烟检测
-                  </button>
-                  <button 
-                    @click="setDetectionMode('violence_detection')" 
-                    :class="{ active: detectionMode === 'violence_detection' }">
-                    暴力检测
-                  </button>
-                </div>
-              </div>
-              
-              <!-- 危险区域编辑 -->
-              <div class="control-section">
-                <h3>危险区域设置</h3>
-                <div class="button-group">
-                  <button @click="toggleEditMode" :class="{ active: editMode }">
-                    {{ editMode ? '保存区域' : '编辑区域' }}
-                  </button>
-                  <button v-if="editMode" @click="cancelEdit">取消编辑</button>
-                </div>
-                <div v-if="editMode" class="edit-instructions">
-                  <p>点击并拖动区域点以调整位置</p>
-                  <p>右键点击删除点</p>
-                  <p>双击添加新点</p>
-                </div>
-              </div>
-              
-              <!-- 参数设置 -->
-              <div class="control-section">
-                <h3>参数设置</h3>
-                <div class="setting-row">
-                  <label>安全距离 (像素)</label>
-                  <input type="range" v-model="safetyDistance" min="10" max="200" step="5" />
-                  <span>{{ safetyDistance }}</span>
-                </div>
-                <div class="setting-row">
-                  <label>警报阈值 (秒)</label>
-                  <input type="range" v-model="loiteringThreshold" min="0.5" max="10" step="0.5" />
-                  <span>{{ loiteringThreshold }}</span>
-                </div>
-                <button @click="updateSettings" class="apply-button">应用设置</button>
-              </div>
-              
-              <!-- 告警信息 -->
-              <div class="control-section">
-                <h3>告警信息</h3>
-                <div class="alerts-container" :class="{ 'has-alerts': alerts.length > 0 }">
-                  <div v-if="alerts.length > 0" class="alert-list">
-                    <div v-for="(alert, index) in alerts" :key="index" class="alert-item">
-                      {{ alert }}
-                    </div>
-                  </div>
-                  <p v-else>当前无告警信息</p>
-                </div>
-              </div>
-
-              <!-- 人员管理 -->
-              <div class="control-section">
-                <h3>人员管理</h3>
-                <div class="button-group">
-                  <button @click="registerFace" class="apply-button">添加人员</button>
-                </div>
-                <div class="user-list-container">
-                  <ul v-if="registeredUsers.length > 0">
-                    <li v-for="user in registeredUsers" :key="user">
-                      <span>{{ user }}</span>
-                      <button @click="deleteFace(user)" class="delete-button">删除</button>
-                    </li>
-                  </ul>
-                  <p v-else>未注册任何人员</p>
-                </div>
-              </div>
-
-              <!-- 新增：活动流列表 -->
-              <div v-if="activeStreams.length > 0" class="control-section">
-                <h3>活动RTMP流</h3>
-                <div class="stream-list">
-                  <div v-for="stream in activeStreams" :key="stream.stream_id" class="stream-item">
-                    <div class="stream-info">
-                      <h4>{{ stream.name }}</h4>
-                      <p>{{ stream.rtmp_url }}</p>
-                      <span class="stream-status" :class="stream.status">{{ stream.status }}</span>
-                    </div>
-                    <div class="stream-controls">
-                      <button @click="selectRtmpStream(stream.stream_id)" class="select-button" :class="{ active: currentRtmpStream === stream.stream_id }">选择</button>
-                      <button @click="stopRtmpStream(stream.stream_id)" class="stop-button">停止</button>
-                      <button @click="deleteRtmpStream(stream.stream_id)" class="delete-button">删除</button>
-                    </div>
-                  </div>
+                <div class="detection-info">
+                  <Eye class="w-4 h-4" />
+                  <span>{{ detectionModeText }}</span>
                 </div>
               </div>
             </div>
+            
+            <!-- 上传文件 (视频) -->
+            <div v-else-if="activeSource === 'upload' && isVideoUrl(videoSource)" key="upload-video" class="video-frame">
+              <video :src="videoSource" controls autoplay class="webcam-feed"></video>
+              <div class="video-overlay">
+                <div class="file-info">
+                  <FileImage class="w-4 h-4" />
+                  <span>已上传文件</span>
+                </div>
+              </div>
+            </div>
+            
+            <!-- 加载状态 -->
+            <div v-else-if="activeSource === 'loading'" key="loading" class="loading-state">
+              <div class="loading-content">
+                <div class="loading-spinner">
+                  <Loader2 class="w-8 h-8 animate-spin" />
+                </div>
+                <p>正在处理文件，请稍候...</p>
+                <div class="loading-progress">
+                  <div class="progress-bar"></div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- 默认占位符 -->
+            <div v-else key="placeholder" class="video-placeholder">
+              <div class="placeholder-content">
+                <Monitor class="w-16 h-16 text-gray-400" />
+                <h3>开始视频监控</h3>
+                <p>请开启摄像头、连接RTMP流或上传文件进行监控</p>
+                <div class="quick-actions">
+                  <button @click="connectWebcam" class="quick-btn primary">
+                    <Video class="w-4 h-4" />
+                    <span>开启摄像头</span>
+                  </button>
+                  <button @click="showRtmpModal" class="quick-btn secondary">
+                    <Radio class="w-4 h-4" />
+                    <span>RTMP流</span>
+                  </button>
+                  <button @click="uploadVideoFile" class="quick-btn tertiary">
+                    <Upload class="w-4 h-4" />
+                    <span>上传文件</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </transition>
+        </div>
+        
+        <!-- 危险区域编辑/实时检测绘制Canvas -->
+        <canvas v-if="editMode || activeSource === 'rtmp'" 
+                ref="interactionCanvas" 
+                class="interaction-canvas"
+                @mousedown="handleMouseDown"
+                @mousemove="handleMouseMove"
+                @mouseup="handleMouseUp"
+                @mouseleave="handleMouseLeave"
+                @dblclick="handleDoubleClick"
+                @contextmenu.prevent="handleRightClick">
+        </canvas>
+      </div>
+    </div>
+
+    <!-- 可滑动侧边栏控制面板 -->
+    <aside class="control-sidebar" :class="{ 'sidebar-open': isSidebarOpen }">
+      <div class="sidebar-header">
+        <div class="header-content">
+          <Settings class="w-5 h-5" />
+          <h2>控制面板</h2>
+        </div>
+        <div class="header-actions">
+          <button @click="toggleSidebar" class="close-btn">
+            <X class="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+      <div class="sidebar-content">
+        <!-- 视频源控制 -->
+        <div class="control-section">
+          <div class="section-header">
+            <PlayCircle class="w-4 h-4" />
+            <h3>视频源控制</h3>
+          </div>
+          <div class="video-controls">
+            <button 
+              @click="connectWebcam"
+              :class="{ active: activeSource === 'webcam' }"
+              class="control-btn primary"
+            >
+              <Video class="w-4 h-4" />
+              <span>{{ activeSource === 'webcam' ? '摄像头运行中' : '开启摄像头' }}</span>
+            </button>
+            <button 
+              @click="disconnectWebcam"
+              v-if="activeSource === 'webcam'"
+              class="control-btn danger"
+            >
+              <Square class="w-4 h-4" />
+              <span>停止摄像头</span>
+            </button>
+            <button 
+              @click="showRtmpModal"
+              :disabled="activeSource === 'webcam'"
+              class="control-btn secondary"
+            >
+              <Radio class="w-4 h-4" />
+              <span>RTMP流连接</span>
+            </button>
+            <button 
+              @click="uploadVideoFile"
+              :disabled="activeSource === 'webcam'"
+              class="control-btn tertiary"
+            >
+              <Upload class="w-4 h-4" />
+              <span>上传文件</span>
+            </button>
           </div>
         </div>
-      </main>
+
+        <!-- 检测模式选择 -->
+        <div class="control-section">
+          <div class="section-header">
+            <Eye class="w-4 h-4" />
+            <h3>检测模式</h3>
+            <div class="mode-indicator">{{ detectionModeText }}</div>
+          </div>
+          <div class="detection-modes-grid">
+            <button 
+              @click="setDetectionMode('object_detection')" 
+              :class="{ active: detectionMode === 'object_detection' }"
+              class="mode-btn"
+            >
+              <Target class="w-4 h-4" />
+              <span>目标检测</span>
+            </button>
+            <button 
+              @click="setDetectionMode('face_only')" 
+              :class="{ active: detectionMode === 'face_only' }"
+              class="mode-btn"
+            >
+              <User class="w-4 h-4" />
+              <span>人脸识别</span>
+            </button>
+            <button 
+              @click="setDetectionMode('fall_detection')" 
+              :class="{ active: detectionMode === 'fall_detection' }"
+              class="mode-btn"
+            >
+              <AlertTriangle class="w-4 h-4" />
+              <span>跌倒检测</span>
+            </button>
+            <button 
+              @click="setDetectionMode('smoking_detection')" 
+              :class="{ active: detectionMode === 'smoking_detection' }"
+              class="mode-btn"
+            >
+              <Cigarette class="w-4 h-4" />
+              <span>抽烟检测</span>
+            </button>
+            <button 
+              @click="setDetectionMode('violence_detection')" 
+              :class="{ active: detectionMode === 'violence_detection' }"
+              class="mode-btn"
+            >
+              <Shield class="w-4 h-4" />
+              <span>暴力检测</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 危险区域设置 -->
+        <div class="control-section">
+          <div class="section-header">
+            <MapPin class="w-4 h-4" />
+            <h3>危险区域设置</h3>
+            <div v-if="editMode" class="edit-badge">编辑中</div>
+          </div>
+          <div class="zone-controls">
+            <button @click="toggleEditMode" :class="{ active: editMode }" class="control-btn primary">
+              <Edit class="w-4 h-4" />
+              <span>{{ editMode ? '保存区域' : '编辑区域' }}</span>
+            </button>
+            <button v-if="editMode" @click="cancelEdit" class="control-btn secondary">
+              <X class="w-4 h-4" />
+              <span>取消编辑</span>
+            </button>
+          </div>
+          <div v-if="editMode" class="edit-instructions">
+            <div class="instruction-item">
+              <MousePointer class="w-3 h-3" />
+              <span>点击并拖动区域点以调整位置</span>
+            </div>
+            <div class="instruction-item">
+              <MousePointer2 class="w-3 h-3" />
+              <span>右键点击删除点</span>
+            </div>
+            <div class="instruction-item">
+              <Plus class="w-3 h-3" />
+              <span>双击添加新点</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 参数设置 -->
+        <div class="control-section">
+          <div class="section-header">
+            <Sliders class="w-4 h-4" />
+            <h3>参数设置</h3>
+          </div>
+          <div class="settings-grid">
+            <div class="setting-item">
+              <div class="setting-header">
+                <label>安全距离</label>
+                <span class="setting-value">{{ safetyDistance }}px</span>
+              </div>
+              <input type="range" v-model="safetyDistance" min="10" max="200" step="5" class="setting-slider" />
+            </div>
+            <div class="setting-item">
+              <div class="setting-header">
+                <label>警报阈值</label>
+                <span class="setting-value">{{ loiteringThreshold }}s</span>
+              </div>
+              <input type="range" v-model="loiteringThreshold" min="0.5" max="10" step="0.5" class="setting-slider" />
+            </div>
+          </div>
+          <button @click="updateSettings" class="apply-settings-btn">
+            <Check class="w-4 h-4" />
+            <span>应用设置</span>
+          </button>
+        </div>
+
+        <!-- 人员管理 -->
+        <div class="control-section">
+          <div class="section-header">
+            <Users class="w-4 h-4" />
+            <h3>人员管理</h3>
+            <div class="user-count">{{ registeredUsers.length }}</div>
+          </div>
+          
+          <div class="user-management">
+            <button @click="registerFace" class="add-user-btn">
+              <UserPlus class="w-4 h-4" />
+              <span>添加新人员</span>
+            </button>
+            
+            <div class="search-box">
+              <Search class="w-4 h-4 search-icon" />
+              <input 
+                v-model="searchQuery"
+                type="text"
+                placeholder="搜索人员..."
+                class="search-input"
+              />
+            </div>
+          </div>
+          
+          <div class="user-list-container">
+            <transition-group name="user-list" tag="ul" class="user-list">
+              <li
+                v-for="user in filteredUsers"
+                :key="user"
+                class="user-item"
+              >
+                <div class="user-info">
+                  <div class="user-avatar">
+                    <User class="w-4 h-4" />
+                  </div>
+                  <div class="user-details">
+                    <span class="user-name">{{ user }}</span>
+                    <span class="user-status">已注册人员</span>
+                  </div>
+                </div>
+                <div class="user-actions">
+                  <button @click="deleteFace(user)" class="action-btn delete">
+                    <Trash2 class="w-3 h-3" />
+                  </button>
+                </div>
+              </li>
+            </transition-group>
+            <div v-if="filteredUsers.length === 0" class="empty-state">
+              <UserX class="w-8 h-8 text-gray-400" />
+              <p>{{ searchQuery ? '未找到匹配的人员' : '未注册任何人员' }}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- RTMP流管理 -->
+        <div class="control-section">
+          <div class="section-header">
+            <Radio class="w-4 h-4" />
+            <h3>活动RTMP流</h3>
+            <div class="stream-count">{{ filteredRtmpStreams.length }}</div>
+          </div>
+          <div class="search-box mb-4">
+            <Search class="w-4 h-4 search-icon" />
+            <input 
+              v-model="searchRtmpQuery"
+              type="text"
+              placeholder="搜索RTMP流..."
+              class="search-input"
+            />
+          </div>
+          <div class="stream-list">
+            <template v-if="filteredRtmpStreams.length > 0">
+              <div v-for="stream in filteredRtmpStreams" :key="stream.stream_id" class="stream-item">
+                <div class="stream-info">
+                  <div class="stream-header">
+                    <h4>{{ stream.name }}</h4>
+                    <span class="stream-status" :class="stream.status">{{ stream.status }}</span>
+                  </div>
+                  <p class="stream-url">{{ stream.rtmp_url }}</p>
+                </div>
+                <div class="stream-controls">
+                  <button @click="selectRtmpStream(stream.stream_id)" 
+                          class="stream-btn select" 
+                          :class="{ active: currentRtmpStream === stream.stream_id }">
+                    <Play class="w-3 h-3" />
+                  </button>
+                  <button @click="stopRtmpStream(stream.stream_id)" class="stream-btn stop">
+                    <Square class="w-3 h-3" />
+                  </button>
+                  <button @click="deleteRtmpStream(stream.stream_id)" class="stream-btn delete">
+                    <Trash2 class="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            </template>
+            <div v-else class="empty-state">
+              <Radio class="w-8 h-8 text-gray-400" />
+              <p>{{ searchRtmpQuery ? '未找到匹配的RTMP流' : '当前暂无RTMP流信息' }}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 告警信息 -->
+        <div class="control-section">
+          <div class="section-header">
+            <AlertTriangle class="w-4 h-4" />
+            <h3>告警信息</h3>
+            <div v-if="alerts.length > 0" class="alert-badge">
+              {{ alerts.length }}
+            </div>
+          </div>
+          <div class="alerts-container" :class="{ 'has-alerts': alerts.length > 0 }">
+            <transition-group name="alert-list" tag="div" class="alert-list">
+              <div
+                v-for="(alert, index) in alerts"
+                :key="`alert-${index}`"
+                class="alert-item"
+              >
+                <div class="alert-header">
+                  <AlertCircle class="w-3 h-3" />
+                  <span class="alert-time">{{ formatTime(new Date()) }}</span>
+                </div>
+                <p class="alert-message">{{ alert }}</p>
+              </div>
+            </transition-group>
+            <div v-if="alerts.length === 0" class="empty-state">
+              <Shield class="w-8 h-8 text-gray-400" />
+              <p>当前无告警信息</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 可拖动悬浮按钮 -->
+    <div 
+      class="floating-control"
+      :style="floatingButtonStyle"
+      @mousedown="startFloatingDrag"
+      @touchstart="startFloatingDrag"
+    >
+      <button
+        class="sidebar-toggle-btn"
+        @click.stop="toggleSidebar"
+        :class="{ 'sidebar-open': isSidebarOpen }"
+      >
+        <transition name="icon-rotate" mode="out-in">
+          <ChevronLeft v-if="isSidebarOpen" key="close" class="w-5 h-5" />
+          <Settings v-else key="open" class="w-5 h-5" />
+        </transition>
+      </button>
     </div>
   </div>
 </template>
 
 <script setup>
 import { useRoute } from 'vue-router'
-import { ref, onMounted, onUnmounted, nextTick } from 'vue' // 移除 watch
-import io from 'socket.io-client';
-
-// 导入侧边栏组件
+import { ref, onMounted, onUnmounted, nextTick, computed, reactive } from 'vue'
+import io from 'socket.io-client'
 import TopBar from '../components/TopBar.vue'
 
-// 当前路径状态
-const currentPath = ref('')
+// 导入图标
+import {
+  Monitor, Video, Upload, Square, Settings, ChevronLeft, X, PlayCircle,
+  AlertTriangle, AlertCircle, Shield, Users, UserPlus, User, UserX, Trash2,
+  FileImage, Loader2, Eye, Search, Target, Edit, MapPin, Sliders, Check,
+  MousePointer, MousePointer2, Plus, Radio, Play, Cigarette
+} from 'lucide-vue-next'
+
+// 路由和状态变量
+const route = useRoute()
+const windowWidth = ref(window.innerWidth)
+const isSidebarOpen = ref(windowWidth.value >= 992)
+
+// 悬浮按钮相关
+const floatingButton = reactive({
+  x: 24,
+  y: 120,
+  isDragging: false,
+  offsetX: 0,
+  offsetY: 0
+})
 
 // API端点设置
 const SERVER_ROOT_URL = 'http://localhost:5000'
 const API_BASE_URL = `${SERVER_ROOT_URL}/api`
-const DLIB_API_BASE_URL = `${API_BASE_URL}/dlib`; // 新的 Dlib API 基础路径
+const DLIB_API_BASE_URL = `${API_BASE_URL}/dlib`
 const VIDEO_FEED_URL = `${API_BASE_URL}/video_feed`
 
-// --- 新增：注册模态框状态 ---
-const showRegistrationModal = ref(false);
-const registrationStatus = ref('');
-const registrationName = ref('');
-const capturedFramesCount = ref(0);
-const registrationVideoEl = ref(null); // video 元素的引用
-const registrationSocket = ref(null); // 注册用的 WebSocket 实例
-const localStream = ref(null); // 本地摄像头流
-const wasWebcamActive = ref(false); // 新增：记录注册前摄像头是否开启
-
-// --- 新增：停止媒体流的辅助函数 ---
-const stopStream = (stream) => {
-  if (stream && stream.getTracks) {
-    stream.getTracks().forEach(track => track.stop());
-  }
-};
+// 人脸注册模态框状态
+const showRegistrationModal = ref(false)
+const registrationStatus = ref('')
+const registrationName = ref('')
+const capturedFramesCount = ref(0)
+const registrationVideoEl = ref(null)
+const registrationSocket = ref(null)
+const localStream = ref(null)
+const wasWebcamActive = ref(false)
 
 // 状态变量
-const videoSource = ref('') // 视频源URL
-const activeSource = ref('') // 'webcam', 'upload', 'loading', 'rtmp'
+const videoSource = ref('')
+const activeSource = ref('')
 const editMode = ref(false)
 const alerts = ref([])
 const safetyDistance = ref(100)
 const loiteringThreshold = ref(2.0)
-const detectionMode = ref('object_detection') // 新增：检测模式状态
-const originalDangerZone = ref([]) // V3: 初始化为空数组
-const registeredUsers = ref([]) // 已注册用户列表
-const pollingIntervalId = ref(null) // 用于轮询的定时器ID
-const videoTaskId = ref(''); // 保存当前视频处理任务的ID
-const displayImage = ref(null); // V3: 统一的图像引用
+const detectionMode = ref('object_detection')
+const originalDangerZone = ref([])
+const registeredUsers = ref([])
+const pollingIntervalId = ref(null)
+const videoTaskId = ref('')
+const searchQuery = ref('')
+const displayImage = ref(null)
 
-// --- V3: Canvas 和危险区域状态 ---
-const interactionCanvas = ref(null);
-const dangerZone = ref([]); // 用于存储和操作危险区域的点
-const isDragging = ref(false);
-const draggingIndex = ref(-1);
+// Canvas 和危险区域状态
+const interactionCanvas = ref(null)
+const dangerZone = ref([])
+const isDragging = ref(false)
+const draggingIndex = ref(-1)
 
-// 新增：RTMP流相关状态
+// RTMP相关状态
 const showRtmpConnectionModal = ref(false)
 const rtmpConfig = ref({
   name: '',
@@ -356,25 +577,86 @@ const rtmpStatus = ref('')
 const activeStreams = ref([])
 const currentRtmpStream = ref('')
 const rtmpSocket = ref(null)
+const currentDetections = ref([]) // For RTMP stream detections
+const searchRtmpQuery = ref('') // New: for RTMP stream search
+const rtmpListPollingIntervalId = ref(null) // New: for polling RTMP stream list
 
-// --- API 调用封装 ---
-// 使用新的 DLIB_API_BASE_URL
-const dlibApiFetch = async (endpoint, options = {}) => {
-  try {
-    const response = await fetch(`${DLIB_API_BASE_URL}${endpoint}`, options);
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ message: response.statusText }));
-      throw new Error(errorData.message || `服务器错误: ${response.status}`);
-    }
-    return await response.json();
-  } catch (error) {
-    console.error(`Dlib API调用失败 ${endpoint}:`, error);
-    alert(`操作失败: ${error.message}`);
-    throw error;
+// Computed properties
+const statusIndicatorClass = computed(() => ({
+  active: activeSource.value === 'webcam' || activeSource.value === 'rtmp'
+}))
+
+const statusText = computed(() => {
+  switch (activeSource.value) {
+    case 'webcam': return '摄像头监控中'
+    case 'rtmp': return 'RTMP流监控中'
+    case 'upload': return '文件分析中'
+    default: return '监控已停止'
   }
-};
+})
 
+const detectionModeText = computed(() => {
+  const modes = {
+    'object_detection': '目标检测',
+    'face_only': '人脸识别',
+    'fall_detection': '跌倒检测',
+    'smoking_detection': '抽烟检测',
+    'violence_detection': '暴力检测'
+  }
+  return modes[detectionMode.value] || '未知模式'
+})
+
+const floatingButtonStyle = computed(() => ({
+  left: `${floatingButton.x}px`,
+  top: `${floatingButton.y}px`,
+  cursor: floatingButton.isDragging ? 'grabbing' : 'grab'
+}))
+
+const filteredUsers = computed(() => {
+  if (!searchQuery.value) return registeredUsers.value
+  return registeredUsers.value.filter(user =>
+    user.toLowerCase().includes(searchQuery.value.toLowerCase())
+  )
+})
+
+const filteredRtmpStreams = computed(() => { // New: Filtered RTMP streams
+  if (!searchRtmpQuery.value) return activeStreams.value
+  return activeStreams.value.filter(stream =>
+    stream.name.toLowerCase().includes(searchRtmpQuery.value.toLowerCase())
+  )
+})
+
+// Time formatting function
+const formatTime = (timestamp) => {
+  if (!timestamp) return ''
+  const date = new Date(timestamp)
+  return date.toLocaleTimeString()
+}
+
+// Helper to stop media stream
+const stopStream = (stream) => {
+  if (stream && stream.getTracks) {
+    stream.getTracks().forEach(track => track.stop())
+  }
+}
+
+// API call wrappers
 const apiFetch = async (endpoint, options = {}) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, options)
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ message: response.statusText }))
+      throw new Error(errorData.message || `服务器错误: ${response.status}`)
+    }
+    return await response.json()
+  } catch (error) {
+    console.error(`API调用失败 ${endpoint}:`, error)
+    alert(`操作失败: ${error.message}`)
+    throw error
+  }
+}
+
+const dlibApiFetch = async (endpoint, options = {}) => {
   try {
     const response = await fetch(`${DLIB_API_BASE_URL}${endpoint}`, options)
     if (!response.ok) {
@@ -427,13 +709,12 @@ const setDetectionMode = async (mode) => {
 // Configuration management
 const loadConfig = async () => {
   try {
-    const data = await apiFetch('/config');
-    safetyDistance.value = data.safety_distance;
-    loiteringThreshold.value = data.loitering_threshold;
-    // V3: 同时加载危险区域数据，为“进入编辑模式”做准备
-    dangerZone.value = data.danger_zone || [];
-    originalDangerZone.value = JSON.parse(JSON.stringify(dangerZone.value));
-    console.log('Configuration loaded:', data);
+    const data = await apiFetch('/config')
+    safetyDistance.value = data.safety_distance
+    loiteringThreshold.value = data.loitering_threshold
+    dangerZone.value = data.danger_zone || []
+    originalDangerZone.value = JSON.parse(JSON.stringify(dangerZone.value))
+    console.log('Configuration loaded:', data)
   } catch (error) {
     // Error handled by apiFetch
   }
@@ -461,7 +742,7 @@ const loadRegisteredUsers = async () => {
     const data = await dlibApiFetch('/faces')
     registeredUsers.value = data.names
   } catch (error) {
-    // dlibApiFetch 中已处理错误
+    // Error handled by dlibApiFetch
   }
 }
 
@@ -822,17 +1103,9 @@ const onImageLoad = () => {
 const toggleEditMode = async () => {
   if (!editMode.value) {
     try {
-      // 保存原始危险区域以便取消时恢复
-      const response = await fetch(`${API_BASE_URL}/config`)
-      const data = await response.json()
-      originalDangerZone.value = data.danger_zone
-      
-      // 切换到编辑模式
-      await fetch(`${API_BASE_URL}/toggle_edit_mode`, {
+      await apiFetch('/toggle_edit_mode', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ edit_mode: true })
       })
       
@@ -847,25 +1120,16 @@ const toggleEditMode = async () => {
       alert('无法进入编辑模式，请重试。')
     }
   } else {
-    // --- 保存并退出编辑模式 ---
     try {
-      // 获取更新后的危险区域
-      const response = await fetch(`${API_BASE_URL}/config`)
-      const data = await response.json()
-      
-      // 保存新的危险区域
-      await fetch(`${API_BASE_URL}/update_danger_zone`, {
+      await apiFetch('/update_danger_zone', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ danger_zone: dangerZone.value }),
       })
       
-      // 通知后端退出编辑模式
       await apiFetch('/toggle_edit_mode', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ edit_mode: false })
       })
       
@@ -882,31 +1146,17 @@ const toggleEditMode = async () => {
         drawCanvas(); // Clear canvas or redraw based on new state
       });
     } catch (error) {
-      console.error('保存危险区域失败:', error);
-      alert('保存危险区域失败，请重试。');
+      console.error('保存危险区域失败:', error)
+      alert('保存危险区域失败，请重试。')
     }
   }
 }
 
 const cancelEdit = async () => {
-  if (!originalDangerZone.value) return
-  
   try {
-    // 只需通知后端退出编辑模式即可
     await apiFetch('/toggle_edit_mode', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ danger_zone: originalDangerZone.value })
-    })
-    
-    // 退出编辑模式
-    await fetch(`${API_BASE_URL}/toggle_edit_mode`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ edit_mode: false })
     })
     editMode.value = false
@@ -915,8 +1165,8 @@ const cancelEdit = async () => {
       drawCanvas(); // Redraw with original danger zone
     });
   } catch (error) {
-    console.error('取消编辑失败:', error);
-    alert('取消编辑操作失败。');
+    console.error('取消编辑失败:', error)
+    alert('取消编辑操作失败。')
   }
 }
 
