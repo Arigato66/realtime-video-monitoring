@@ -25,13 +25,15 @@ class RTMPStreamManager:
         self.reader_threads = {}
         
         # 初始化AI模型
-
-
         print("正在初始化AI模型...")
         try:
+            # 关键修改：导入get_dlib_face_service函数
             from app.services.detection import get_object_model, get_face_model
-            from app.services.dlib_service import dlib_face_service
+            from app.services.dlib_service import get_dlib_face_service  # 新增导入
             
+            # 调用函数获取实例
+            dlib_face_service = get_dlib_face_service()
+
             self.models = {
                 'object': get_object_model(),
                 'face': get_face_model()
@@ -45,8 +47,6 @@ class RTMPStreamManager:
                 'object': None,
                 'face': None
             }
-
-
             self.dlib_service = None
     
     def add_stream(self, config: dict) -> str:

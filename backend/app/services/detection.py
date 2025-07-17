@@ -5,14 +5,25 @@ from sqlalchemy.exc import IntegrityError
 import os
 # --- V4: 修正模块导入问题 ---
 from app.services import danger_zone as danger_zone_service
-from app.services.danger_zone import SAFETY_DISTANCE, LOITERING_THRESHOLD, TARGET_CLASSES
+from app.services.danger_zone import (
+    DANGER_ZONE as danger_zone,  # 直接使用全局变量
+    SAFETY_DISTANCE as safety_distance,
+    LOITERING_THRESHOLD as loitering_threshold,
+    TARGET_CLASSES,
+    load_config
+)
+
+# 确保配置已加载
+load_config()
 # --- 结束 V4 ---
 from app.services.alerts import (
     add_alert, update_loitering_time, reset_loitering_time, get_loitering_time,
     update_detection_time, get_alerts, reset_alerts
 )
 from app.utils.geometry import point_in_polygon, distance_to_polygon
-from app.services.dlib_service import dlib_face_service
+
+
+
 from app.services import system_state
 from app.services.smoking_detection_service import SmokingDetectionService
 import time
@@ -26,6 +37,15 @@ import uuid
 from datetime import datetime
 from app import db
 from collections import defaultdict  # 新增导入
+from sqlalchemy.exc import IntegrityError
+import io
+import os
+from PIL import Image
+from app.services.dlib_service import get_dlib_face_service
+
+# 常量定义（补充缺失的常量）
+LOITERING_THRESHOLD = 2.0  # 停留时间阈值（秒）
+SAFETY_DISTANCE = 100  # 安全距离（像素）
 # --- 模型管理 (使用相对路径) ---
 # 路径是相对于 backend/app/services/ 目录的
 # '..' 回退到 backend/app/
@@ -39,6 +59,11 @@ OBJECT_MODEL_PATH = os.path.join(MODEL_DIR, "yolov8n.pt")
 FACE_MODEL_PATH = os.path.join(MODEL_DIR, "yolov8n-face-lindevs.pt")
 SMOKING_MODEL_PATH = os.path.join(MODEL_DIR, "smoking_detection.pt")
 
+from app.models import (
+    DangerZoneConfig, BehaviorDetectionLog, Alert,
+)
+from datetime import datetime, timedelta
+import uuid
 
 # 全局变量来持有加载的模型
 pose_model = None
@@ -83,7 +108,10 @@ def get_model():
 pose_history = {}
 FALL_DETECTION_THRESHOLD_SPEED = -15  # 重心Y坐标速度阈值 (像素/帧)
 FALL_DETECTION_THRESHOLD_STATE_FRAMES = 10 # 确认跌倒状态需要的帧数
-
+# 常量定义（补充缺失的常量）
+LOITERING_THRESHOLD = 2.0  # 停留时间阈值（秒）
+SAFETY_DISTANCE = 100  # 安全距离（像素）
+OBJECT_MODEL_PATH = "yolov8n.pt"  # 替换为实际模型路径
 
 def process_image(filepath, uploads_dir):
     """
@@ -96,6 +124,8 @@ def process_image(filepath, uploads_dir):
     返回:
         dict: 包含处理结果的字典
     """
+   
+    dlib_face_service = get_dlib_face_service()
     # 重置警报，以防上次调用的状态残留
     reset_alerts()
     
@@ -143,7 +173,7 @@ def process_image(filepath, uploads_dir):
         return {"status": "error", "message": "暴力检测仅支持视频文件"}, 400
 
     else:
-        # Default execution path must also use a fresh, local instance
+          # Default execution path must also use a fresh, local instance
         model_local = YOLO(OBJECT_MODEL_PATH)
         detections = model_local.predict(img)
         res_plotted = detections[0].plot()
@@ -176,6 +206,8 @@ def process_image(filepath, uploads_dir):
 def process_video(filepath, uploads_dir):
     """完整视频处理函数，支持多模式检测并优化跌倒记录"""
     # 重置警报和缓存
+
+    dlib_face_service = get_dlib_face_service()
     reset_alerts()
     fall_events = []  # 局部变量：缓存跌倒事件（避免全局变量冲突）
     
@@ -546,113 +578,50 @@ def log_smoking_behavior(camera_id, location_id, behavior_type, confidence_score
         print(f"数据库记录失败: {str(e)}")
         db.session.rollback()
 
-
-# 全局缓存：记录已处理的事件，避免重复写入数据库
-zone_enter_history = set()  # 已记录闯入的目标ID
-loitering_logged = set()    # 已记录停留超时的目标ID
-too_close_logged = dict()   # 已记录距离过近的目标ID: 上次记录时间
-
-def is_target_in_zone_history(target_id):
-    """判断目标是否已记录过闯入事件"""
-    return target_id in zone_enter_history
-
-def add_target_to_zone_history(target_id):
-    """添加目标到闯入历史"""
-    zone_enter_history.add(target_id)
-
-def is_loitering_logged(target_id):
-    """判断目标是否已记录过停留超时"""
-    return target_id in loitering_logged
-
-def mark_loitering_logged(target_id):
-    """标记目标为已记录停留超时"""
-    loitering_logged.add(target_id)
-
-def is_too_close_logged(target_id):
-    """判断目标是否已记录过距离过近（5秒内不重复）"""
-    last_time = too_close_logged.get(target_id)
-    if not last_time:
-        return False
-    return (datetime.now() - last_time).total_seconds() < 5  # 5秒内不重复
-
-def mark_too_close_logged(target_id, timeout=5):
-    """标记目标为已记录距离过近"""
-    too_close_logged[target_id] = datetime.now()
-    
-def process_object_detection_results(results, frame, time_diff, frame_count, camera_id, location_id):
+       
+def process_object_detection_results(results, frame, time_diff, frame_count):
     """
     处理通用目标检测结果（危险区域、徘徊等）
+    (这是您之前的 process_detection_results 函数，已重命名并保留)
     """
-    # 设置当前处理的帧
-    set_current_frame(frame)
-    
-    # 编辑模式跳过检测逻辑
+    # --- V3 混合驱动：在编辑模式下，跳过所有危险区域的闯入/靠近检测逻辑 ---
     if config_state.edit_mode:
-        if results and results[0].boxes is not None and hasattr(results[0].boxes, 'id'):
+        # 仍然需要绘制检测框，所以我们只跳过危险区域的部分
+        if results and results[0].boxes is not None and hasattr(results[0].boxes, 'id') and results[0].boxes.id is not None:
+            boxes = results[0].boxes.cpu().numpy()
+            # 绘制YOLOv8的默认结果（框和ID）
             frame[:] = results[0].plot()
-        return
+        return # 直接返回，不执行后续的危险区域判断
+    # --- 结束新增 ---
 
-    # 有追踪结果时处理
-    if hasattr(results[0], 'boxes') and hasattr(results[0].boxes, 'id'):
+    # 如果有追踪结果，在画面上显示追踪ID和危险区域告警
+    if hasattr(results[0], 'boxes') and hasattr(results[0].boxes, 'id') and results[0].boxes.id is not None:
         boxes = results[0].boxes.xyxy.cpu().numpy()
         ids = results[0].boxes.id.int().cpu().numpy()
         classes = results[0].boxes.cls.cpu().numpy()
+        
+        # 获取类别名称
         class_names = results[0].names
         
-        # 获取危险区域配置
-        danger_zone = danger_zone_service.get_danger_zone(location_id)
-        if not danger_zone:
-            print(f"警告：位置 {location_id} 的危险区域未配置")
-            return
-            
-        for box, target_id, cls in zip(boxes, ids, classes):
+        for box, id, cls in zip(boxes, ids, classes):
             x1, y1, x2, y2 = box
             class_name = class_names[int(cls)]
-            foot_point = (int((x1 + x2) / 2), int(y2))  # 目标底部中心点
+            
+            # # 只处理指定类别的目标 (暂时移除此限制，以检测所有物体)
+            # if int(cls) in TARGET_CLASSES:
+            # 在目标检测模式下，我们不再进行人脸识别，直接使用类别名
+            display_name = class_name
+            
+            # 计算目标的底部中心点
+            foot_point = (int((x1 + x2) / 2), int(y2))
             
             # 检查是否在危险区域内
-            in_danger_zone = point_in_polygon(foot_point, danger_zone)
+            # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+            in_danger_zone = point_in_polygon(foot_point, danger_zone_service.DANGER_ZONE)
+            
             # 计算到危险区域的距离
-            distance = distance_to_polygon(foot_point, danger_zone)
-            # 获取安全距离和停留阈值
-            safety_distance = danger_zone_service.get_safety_distance(location_id)
-            loitering_threshold = danger_zone_service.get_loitering_threshold(location_id)
-            
-            # 1. 危险区域闯入记录
-            if in_danger_zone and not is_target_in_zone_history(target_id):
-                log_danger_zone_behavior(
-                    camera_id=camera_id,
-                    location_id=location_id,
-                    target_id=target_id,
-                    behavior_type="zone_enter"
-                )
-                add_target_to_zone_history(target_id)
-            
-            # 2. 停留超时记录
-            if in_danger_zone:
-                loitering_time = update_loitering_time(target_id, time_diff)
-                if loitering_time >= loitering_threshold and not is_loitering_logged(target_id):
-                    log_danger_zone_behavior(
-                        camera_id=camera_id,
-                        location_id=location_id,
-                        target_id=target_id,
-                        behavior_type="loitering",
-                        loitering_time=loitering_time
-                    )
-                    mark_loitering_logged(target_id)
-            else:
-                reset_loitering_time(target_id)
-            
-            # 3. 距离过近记录
-            if not in_danger_zone and distance < safety_distance and not is_too_close_logged(target_id):
-                log_danger_zone_behavior(
-                    camera_id=camera_id,
-                    location_id=location_id,
-                    target_id=target_id,
-                    behavior_type="too_close",
-                    distance=distance
-                )
-                mark_too_close_logged(target_id, timeout=5)
+            # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+            distance = distance_to_polygon(foot_point, danger_zone_service.DANGER_ZONE)
             
             # 确定标签颜色和告警状态
             label_color = (0, 255, 0)  # 默认绿色
@@ -660,13 +629,13 @@ def process_object_detection_results(results, frame, time_diff, frame_count, cam
             
             # 如果在危险区域内，更新停留时间
             if in_danger_zone:
-                loitering_time = update_loitering_time(target_id, time_diff)
+                loitering_time = update_loitering_time(id, time_diff)
                 
                 # 如果停留时间超过阈值，标记为红色并记录告警
                 if loitering_time >= LOITERING_THRESHOLD:
                     # 使用纯红色
                     label_color = (0, 0, 255)  # BGR格式：红色
-                    alert_status = f"ID:{target_id} ({class_name}) staying in danger zone for {loitering_time:.1f}s"
+                    alert_status = f"ID:{id} ({display_name}) staying in danger zone for {loitering_time:.1f}s"
                     add_alert(alert_status)
                 else:
                     # 根据停留时间从橙色到红色渐变
@@ -675,7 +644,7 @@ def process_object_detection_results(results, frame, time_diff, frame_count, cam
                     label_color = (0, int(165 * (1 - ratio)), 255)
             else:
                 # 如果不在区域内，重置停留时间
-                reset_loitering_time(target_id)
+                reset_loitering_time(id)
 
                 # 如果距离小于安全距离，根据距离设置颜色从绿色到黄色
                 if distance < SAFETY_DISTANCE:
@@ -684,14 +653,14 @@ def process_object_detection_results(results, frame, time_diff, frame_count, cam
                     # 从黄色(0,255,255)到绿色(0,255,0)渐变
                     label_color = (0, 255, int(255 * (1 - ratio)))
                     
-                    alert_status = f"ID:{target_id} ({class_name}) too close to danger zone ({distance:.1f}px)"
+                    alert_status = f"ID:{id} ({display_name}) too close to danger zone ({distance:.1f}px)"
                     add_alert(alert_status)
             
             # 在每个目标上方显示ID和类别
-            label = f"ID:{target_id} {class_name}"
+            label = f"ID:{id} {display_name}"
 
             if in_danger_zone:
-                label += f" time:{get_loitering_time(target_id):.1f}s"
+                label += f" time:{get_loitering_time(id):.1f}s"
             elif distance < SAFETY_DISTANCE:
                 label += f" dist:{distance:.1f}px"
             
@@ -699,10 +668,10 @@ def process_object_detection_results(results, frame, time_diff, frame_count, cam
             thickness = 2  # 默认粗细
             if in_danger_zone:
                 # 在危险区域内，根据停留时间增加边框粗细
-                thickness = max(2, int(4 * min(1.0, get_loitering_time(target_id) / LOITERING_THRESHOLD)))
+                thickness = max(2, int(4 * min(1.0, get_loitering_time(id) / LOITERING_THRESHOLD)))
                 
                 # 如果停留时间超过阈值，添加警告标记
-                if get_loitering_time(target_id) >= LOITERING_THRESHOLD:
+                if get_loitering_time(id) >= LOITERING_THRESHOLD:
                     # 在目标上方绘制警告三角形
                     triangle_height = 20
                     triangle_base = 20
@@ -745,150 +714,73 @@ def process_object_detection_results(results, frame, time_diff, frame_count, cam
             if not in_danger_zone and distance < SAFETY_DISTANCE * 2:
                 draw_distance_line(frame, foot_point, distance)
 
-def draw_distance_line(frame, foot_point, distance, color):
-    """绘制目标到危险区域的距离线"""
-    # 找到危险区域最近点
-    min_dist = float('inf')
-    closest_point = None
-    for i in range(len(danger_zone_service.DANGER_ZONE)):
-        p1 = np.array(danger_zone_service.DANGER_ZONE[i])
-        p2 = np.array(danger_zone_service.DANGER_ZONE[(i + 1) % len(danger_zone_service.DANGER_ZONE)])
-        line_vec = p2 - p1
-        line_len = np.linalg.norm(line_vec)
-        if line_len == 0:
-            continue
-        line_unitvec = line_vec / line_len
-        pt_vec = np.array(foot_point) - p1
-        proj_len = np.dot(pt_vec, line_unitvec)
-        proj_len = max(0, min(line_len, proj_len))
-        closest_pt = p1 + line_unitvec * proj_len
-        dist = np.linalg.norm(np.array(foot_point) - closest_pt)
-        if dist < min_dist:
-            min_dist = dist
-            closest_point = tuple(map(int, closest_pt))
-
-    # 绘制距离线
-    if closest_point:
-        cv2.line(frame, foot_point, closest_point, color, 2)
-        mid_point = (
-            (foot_point[0] + closest_point[0]) // 2,
-            (foot_point[1] + closest_point[1]) // 2
-        )
-        cv2.putText(frame, f"{distance:.1f}px", mid_point,
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-
-import cv2
-import numpy as np
-from datetime import datetime
-import uuid
-from sqlalchemy.exc import IntegrityError
-import io
-from PIL import Image
-
-# 新增全局变量，用于存储当前帧图像
-current_frame = None
-
-def set_current_frame(frame):
-    """设置当前处理的帧图像"""
-    global current_frame
-    current_frame = frame.copy()
-
-def log_danger_zone_behavior(camera_id, location_id, target_id, behavior_type, distance=None, loitering_time=None):
+def draw_distance_line(frame, foot_point, distance):
     """
-    记录目标检测相关行为（危险区域闯入/停留/过近）到数据库，并保存相关图像
+    绘制从目标到危险区域的连接线
     
     参数:
-        camera_id: 摄像头ID
-        location_id: 位置ID
-        target_id: 目标追踪ID
-        behavior_type: 行为类型（"zone_enter"/"loitering"/"too_close"）
-        distance: 目标到危险区域的距离（仅用于"too_close"）
-        loitering_time: 停留时间（仅用于"loitering"）
+        frame: 当前视频帧
+        foot_point: 目标的底部中心点
+        distance: 目标到危险区域的距离
     """
-    try:
-        # 生成唯一ID和时间戳
-        detection_id = str(uuid.uuid4())
-        current_time = datetime.now()
+    # 找到危险区域上最近的点
+    min_dist = float('inf')
+    closest_point = None
+    # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+    for i in range(len(danger_zone_service.DANGER_ZONE)):
+        p1 = danger_zone_service.DANGER_ZONE[i]
+        p2 = danger_zone_service.DANGER_ZONE[(i + 1) % len(danger_zone_service.DANGER_ZONE)]
         
-        # 确定风险等级和置信度
-        if behavior_type == "loitering" and loitering_time is not None:
-            risk_level = "high" if loitering_time > 5 else "medium"
-            confidence_score = min(1.0, loitering_time / 10)
-        elif behavior_type == "zone_enter":
-            risk_level = "high"
-            confidence_score = 1.0
-        elif behavior_type == "too_close" and distance is not None:
-            safety_distance = danger_zone_service.get_safety_distance(location_id)
-            risk_level = "high" if distance < safety_distance * 0.5 else "medium"
-            confidence_score = 1.0 - (distance / (safety_distance * 2))
+        # 计算点到线段的最近点
+        line_vec = p2 - p1
+        line_len = np.linalg.norm(line_vec)
+        line_unitvec = line_vec / line_len
         
-        # 行为描述信息
-        if behavior_type == "zone_enter":
-            behavior_desc = f"目标 {target_id} 闯入危险区域"
-        elif behavior_type == "loitering":
-            behavior_desc = f"目标 {target_id} 在危险区域停留超时（{loitering_time:.1f}秒）"
-        else:  # too_close
-            behavior_desc = f"目标 {target_id} 距离危险区域过近（{distance:.1f}px）"
+        pt_vec = np.array(foot_point) - p1
+        proj_len = np.dot(pt_vec, line_unitvec)
         
-        # 创建行为检测记录
-        behavior_log = BehaviorDetectionLog(
-            detection_id=detection_id,
-            passenger_id=None,
-            camera_id=camera_id,
-            location_id=location_id,
-            detection_time=current_time,
-            behavior_type=behavior_type,
-            confidence_score=confidence_score,
-            risk_level=risk_level,
-            detection_area="danger_zone"
-        )
+        if proj_len < 0:
+            closest_pt = p1
+        elif proj_len > line_len:
+            closest_pt = p2
+        else:
+            closest_pt = p1 + line_unitvec * proj_len
         
-        # 创建告警记录
-        alert = Alert(
-            alert_id=str(uuid.uuid4()),
-            detection_id=detection_id,
-            alert_time=current_time,
-            alert_type="danger_zone_violation",
-            severity=risk_level,
-            status="unprocessed",
-            camera_id=camera_id,
-            location_id=location_id,
-            message=behavior_desc
-        )
+        d = np.linalg.norm(np.array(foot_point) - closest_pt)
+        if d < min_dist:
+            min_dist = d
+            closest_point = tuple(map(int, closest_pt))
+    
+    # 绘制从目标到危险区域的连接线，颜色根据距离变化
+    if closest_point:
+        # 根据距离调整线条粗细和样式
+        line_thickness = max(1, int(3 * (1 - distance / (SAFETY_DISTANCE * 2))))
         
-        # 截取并保存相关图像
-        if current_frame is not None:
-            # 截取整个帧作为图像
-            img = current_frame.copy()
-            
-            # 将图像转换为二进制格式
-            is_success, buffer = cv2.imencode(".jpg", img)
-            io_buf = io.BytesIO(buffer)
-            img_bytes = io_buf.getvalue()
-            
-            # 创建图像记录
-            from app.models import DetectionImage  # 假设存在这个模型
-            detection_image = DetectionImage(
-                image_id=str(uuid.uuid4()),
-                detection_id=detection_id,
-                image_data=img_bytes,  # 存储二进制图像数据
-                image_format="jpg",
-                timestamp=current_time
-            )
-            
-            db.session.add(detection_image)
+        # 绘制主线
+        label_color = (0, 255, int(255 * (1 - distance / SAFETY_DISTANCE))) if distance < SAFETY_DISTANCE else (0, 255, 0)
+        cv2.line(frame, foot_point, closest_point, label_color, line_thickness)
         
-        # 提交到数据库
-        db.session.add(behavior_log)
-        db.session.add(alert)
-        db.session.commit()
-        print(f"目标检测行为记录成功，detection_id={detection_id}")
-        return detection_id
+        # 在线上显示距离数字
+        mid_point = ((foot_point[0] + closest_point[0]) // 2, 
+                    (foot_point[1] + closest_point[1]) // 2)
+        cv2.putText(frame, f"{distance:.1f}px", 
+                    (mid_point[0] + 5, mid_point[1] - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, label_color, 1)
         
-    except Exception as e:
-        print(f"目标检测记录失败: {str(e)}")
-        db.session.rollback()
-        return None
+        # 如果距离小于安全距离，添加虚线效果
+        if distance < SAFETY_DISTANCE:
+            # 计算线段长度
+            line_length = np.linalg.norm(np.array(foot_point) - np.array(closest_point))
+            # 计算单位向量
+            if line_length > 0:
+                unit_vector = (np.array(closest_point) - np.array(foot_point)) / line_length
+                # 绘制短线段形成虚线效果
+                for i in range(0, int(line_length), 10):
+                    start_point = np.array(foot_point) + i * unit_vector
+                    end_point = start_point + 5 * unit_vector
+                    start_point = tuple(map(int, start_point))
+                    end_point = tuple(map(int, end_point))
+                    cv2.line(frame, start_point, end_point, (0, 0, 255), line_thickness + 1)               
 
 # 全局变量：存储检测到的跌倒事件
 fall_events = []
@@ -1063,6 +955,9 @@ def process_faces_only(frame, frame_count, state):
     # --- 性能诊断：步骤2 ---
     t2 = time.time()
     # 将边界框传递给 Dlib 服务进行识别
+
+    dlib_face_service = get_dlib_face_service()
+    
     recognized_faces = dlib_face_service.identify_faces(frame, boxes)
     t3 = time.time()
 
@@ -1099,74 +994,6 @@ def process_faces_only(frame, frame_count, state):
     # 不再返回 frame，因为是直接在原图上修改
     # return frame
 
-
-def draw_distance_line(frame, foot_point, distance):
-    """
-    绘制从目标到危险区域的连接线
-    
-    参数:
-        frame: 当前视频帧
-        foot_point: 目标的底部中心点
-        distance: 目标到危险区域的距离
-    """
-    # 找到危险区域上最近的点
-    min_dist = float('inf')
-    closest_point = None
-    # --- V4: 使用模块访问最新的 DANGER_ZONE ---
-    for i in range(len(danger_zone_service.DANGER_ZONE)):
-        p1 = danger_zone_service.DANGER_ZONE[i]
-        p2 = danger_zone_service.DANGER_ZONE[(i + 1) % len(danger_zone_service.DANGER_ZONE)]
-        
-        # 计算点到线段的最近点
-        line_vec = p2 - p1
-        line_len = np.linalg.norm(line_vec)
-        line_unitvec = line_vec / line_len
-        
-        pt_vec = np.array(foot_point) - p1
-        proj_len = np.dot(pt_vec, line_unitvec)
-        
-        if proj_len < 0:
-            closest_pt = p1
-        elif proj_len > line_len:
-            closest_pt = p2
-        else:
-            closest_pt = p1 + line_unitvec * proj_len
-        
-        d = np.linalg.norm(np.array(foot_point) - closest_pt)
-        if d < min_dist:
-            min_dist = d
-            closest_point = tuple(map(int, closest_pt))
-    
-    # 绘制从目标到危险区域的连接线，颜色根据距离变化
-    if closest_point:
-        # 根据距离调整线条粗细和样式
-        line_thickness = max(1, int(3 * (1 - distance / (SAFETY_DISTANCE * 2))))
-        
-        # 绘制主线
-        label_color = (0, 255, int(255 * (1 - distance / SAFETY_DISTANCE))) if distance < SAFETY_DISTANCE else (0, 255, 0)
-        cv2.line(frame, foot_point, closest_point, label_color, line_thickness)
-        
-        # 在线上显示距离数字
-        mid_point = ((foot_point[0] + closest_point[0]) // 2, 
-                    (foot_point[1] + closest_point[1]) // 2)
-        cv2.putText(frame, f"{distance:.1f}px", 
-                    (mid_point[0] + 5, mid_point[1] - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, label_color, 1)
-        
-        # 如果距离小于安全距离，添加虚线效果
-        if distance < SAFETY_DISTANCE:
-            # 计算线段长度
-            line_length = np.linalg.norm(np.array(foot_point) - np.array(closest_point))
-            # 计算单位向量
-            if line_length > 0:
-                unit_vector = (np.array(closest_point) - np.array(foot_point)) / line_length
-                # 绘制短线段形成虚线效果
-                for i in range(0, int(line_length), 10):
-                    start_point = np.array(foot_point) + i * unit_vector
-                    end_point = start_point + 5 * unit_vector
-                    start_point = tuple(map(int, start_point))
-                    end_point = tuple(map(int, end_point))
-                    cv2.line(frame, start_point, end_point, (0, 0, 255), line_thickness + 1) 
 
 
 def process_violence_detection(filepath, uploads_dir, camera_id, location_id):

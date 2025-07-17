@@ -6,6 +6,7 @@ import os
 import logging
 import csv
 from concurrent.futures import ThreadPoolExecutor
+from flask import current_app  # 新增导入
 
 # --- Dlib 模型和数据路径定义 ---
 # 所有路径都应相对于 `backend/dlib_data` 目录构建
@@ -22,7 +23,6 @@ FACES_DIR = os.path.join(DLIB_BASE_DIR, 'data_faces_from_camera')
 FEATURES_CSV_PATH = os.path.join(DLIB_BASE_DIR, 'features_all.csv')
 
 
-# --- Dlib 人脸识别服务类 ---
 class DlibFaceService:
     def __init__(self):
         """
@@ -31,7 +31,6 @@ class DlibFaceService:
         logging.info("正在初始化 Dlib 人脸识别服务...")
         
         # --- 新增：为并行处理创建一个可复用的线程池 ---
-        # CPU核心数的一半是一个比较合理的线程数，避免过度竞争
         max_workers = max(1, os.cpu_count() // 2)
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
 
@@ -45,31 +44,48 @@ class DlibFaceService:
             logging.error(f"加载 Dlib 模型失败: {e}")
             raise RuntimeError(f"无法加载Dlib模型，请检查路径: {SHAPE_PREDICTOR_PATH} 和 {FACE_REC_MODEL_PATH}")
 
-        # 2. 加载已知人脸特征数据库
+        # 2. 初始化人脸特征数据库（延迟加载）
         self.face_feature_known_list = []
         self.face_name_known_list = []
-        self.load_face_database()
+        
+        # 不在这里立即加载数据库，改为提供单独的方法
+        self._database_loaded = False
+    
+    def ensure_database_loaded(self):
+        """确保人脸特征数据库已加载"""
+        if not self._database_loaded:
+            self.load_face_database()
+            self._database_loaded = True
     
     def load_face_database(self):
-        """
-        从 features_all.csv 加载所有已知的人脸特征到内存中。
-        """
-        if os.path.exists(FEATURES_CSV_PATH) and os.path.getsize(FEATURES_CSV_PATH) > 0:
-            try:
-                csv_rd = pd.read_csv(FEATURES_CSV_PATH, header=None)
-                self.face_name_known_list = []
-                self.face_feature_known_list = []
-                for i in range(csv_rd.shape[0]):
-                    # 第一列是姓名
-                    self.face_name_known_list.append(csv_rd.iloc[i][0])
-                    # 后面的128列是特征
-                    features = [float(x) for x in csv_rd.iloc[i][1:].values]
-                    self.face_feature_known_list.append(features)
-                logging.info(f"成功从 CSV 加载 {len(self.face_name_known_list)} 个已知人脸特征。")
-            except Exception as e:
-                logging.error(f"从 CSV 加载特征时出错: {e}")
-        else:
-            logging.warning(f"特征文件 '{FEATURES_CSV_PATH}' 不存在或为空。")
+        """从features表加载所有已知的人脸特征到内存中"""
+        try:
+            # 使用 current_app.app_context() 确保在应用上下文内
+            if not current_app:
+                raise RuntimeError("必须在Flask应用上下文中加载人脸数据库")
+                
+            from app.models import Features  # 延迟导入，避免循环依赖
+            features = Features.query.all()
+            self.face_name_known_list = []
+            self.face_feature_known_list = []
+            
+            for f in features:
+                # 提取128D特征向量
+                feature_vector = [
+                    getattr(f, f"feature_{i}") 
+                    for i in range(1, 129)
+                ]
+                self.face_name_known_list.append(f.person_name)
+                self.face_feature_known_list.append(np.array(feature_vector))
+            
+            logging.info(f"成功从数据库加载 {len(self.face_name_known_list)} 个已知人脸特征。")
+            return True
+        except Exception as e:
+            logging.error(f"从数据库加载特征时出错: {e}")
+            self.face_name_known_list = []
+            self.face_feature_known_list = []
+            return False
+
 
     def _recognize_single_face(self, args):
         """
@@ -223,4 +239,13 @@ class DlibFaceService:
 
 
 # 创建一个单例
-dlib_face_service = DlibFaceService() 
+dlib_face_service = None  # 修改为None，延迟初始化
+
+# 修改单例获取函数
+def get_dlib_face_service():
+    """获取DlibFaceService单例，确保在应用上下文内初始化"""
+    global dlib_face_service
+    if dlib_face_service is None:
+        dlib_face_service = DlibFaceService()
+        # 不在这里加载数据库，由调用方确保在正确的上下文中调用ensure_database_loaded()
+    return dlib_face_service

@@ -1,5 +1,8 @@
 from flask import Blueprint, jsonify, request
-from app.services.dlib_service import dlib_face_service
+from app.services.dlib_service import get_dlib_face_service  # 新增导入
+
+dlib_face_service = get_dlib_face_service()
+
 from app import socketio
 from flask_socketio import emit
 import logging

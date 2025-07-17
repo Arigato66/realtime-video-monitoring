@@ -6,8 +6,13 @@ from flask_bcrypt import Bcrypt
 from flask import jsonify  
 from flask_sqlalchemy import SQLAlchemy 
 from flask_socketio import SocketIO
-from .config import config  # 修改这里：导入config字典
+from .config import config  # 导入config字典
 import os
+import logging  # 新增：导入日志模块
+
+# 配置日志，方便调试
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 db = SQLAlchemy()
 bcrypt = Bcrypt()
@@ -90,19 +95,30 @@ def create_app(config_name=None):
     add_jwt_handlers(jwt)
     add_error_handlers(app)
     
-    # 测试数据库连接
+    # 关键修改：在应用上下文内初始化dlib服务（放在蓝图注册后，确保无循环导入）
     with app.app_context():
-        try:
-            with db.engine.connect() as conn:
-                result = conn.execute(db.text("SELECT 1"))
-                print("✅ 数据库连接成功")
-        except Exception as e:
-            print(f"❌ 数据库连接失败: {e}")
-            import traceback
-            print(traceback.format_exc())
+      try:
+          # 1. 测试数据库连接
+          with db.engine.connect() as conn:
+              result = conn.execute(db.text("SELECT 1"))
+              print("✅ 数据库连接成功")
+          
+          # 2. 初始化dlib服务（确保在数据库连接成功后）
+          logger.info("开始初始化dlib人脸服务...")
+          from app.services.dlib_service import get_dlib_face_service
+          dlib_face_service = get_dlib_face_service()
+          # 确保在应用上下文中加载数据库
+          dlib_face_service.ensure_database_loaded()
+          logger.info("✅ dlib人脸服务初始化成功")
+      
+      except Exception as e:
+          print(f"❌ 初始化失败: {e}")
+          import traceback
+          print(traceback.format_exc())
 
-    return app 
+    return app
 
+# 以下函数保持不变
 def add_jwt_handlers(jwt):
     """添加JWT错误处理"""
     @jwt.invalid_token_loader
