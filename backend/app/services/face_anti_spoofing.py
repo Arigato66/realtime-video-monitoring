@@ -10,6 +10,7 @@ import numpy as np
 import dlib
 from app.services import config
 from app.services.download_models import download_required_models
+from app.services import system_state  # 导入system_state模块
 
 # 全局变量，用于指示使用哪种人脸检测器
 USE_DLIB = True
@@ -113,9 +114,13 @@ def detect_faces(gray):
         return rectangles
 
 def run_face_anti_spoofing():
-    # 创建窗口
-    cv2.namedWindow('liveness_detection', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow('liveness_detection', 800, 600)
+    # 先销毁所有可能存在的OpenCV窗口
+    cv2.destroyAllWindows()
+    
+    # 创建窗口，使用英文名称避免编码问题
+    window_name = 'liveness_detection'
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, 800, 600)
     
     # 尝试打开摄像头
     print("正在打开摄像头...")
@@ -164,7 +169,7 @@ def run_face_anti_spoofing():
             if im is None:
                 break
                 
-            cv2.imshow('liveness_detection', im)
+            cv2.imshow(window_name, im)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break 
             
@@ -226,7 +231,7 @@ def run_face_anti_spoofing():
                 if im is None:
                     break
                     
-                cv2.imshow('liveness_detection', im)
+                cv2.imshow(window_name, im)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break 
                 
@@ -236,7 +241,7 @@ def run_face_anti_spoofing():
                     if im is None:
                         break
                         
-                    cv2.imshow('liveness_detection', im)
+                    cv2.imshow(window_name, im)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         break
                     
@@ -254,38 +259,48 @@ def run_face_anti_spoofing():
                     counter_try += 1
                     im = show_image(cam, question + " : fail", color=(0, 0, 255))
                     if im is not None:
-                        cv2.imshow('liveness_detection', im)
+                        cv2.imshow(window_name, im)
                         cv2.waitKey(1)
                 elif i_try == limit_try - 1:
                     break
                     
             # 检查是否完成所有问题
             if counter_ok_questions == limit_questions:
-                while True:
-                    im = show_image(cam, "LIVENESS SUCCESSFUL", color=(0, 255, 0))
+                # 设置检测模式为人脸识别模式
+                system_state.DETECTION_MODE = 'face_only'
+                # 启用人脸识别按钮
+                system_state.FACE_RECOGNITION_ENABLED = True
+                print("活体检测成功，已启用人脸识别按钮")
+                
+                # 显示成功信息
+                for i in range(30):  # 显示3秒（假设每次循环约0.1秒）
+                    im = show_image(cam, "LIVENESS SUCCESSFUL - Switching to Face Recognition", color=(0, 255, 0))
                     if im is None:
                         break
                         
-                    cv2.imshow('liveness_detection', im)
+                    cv2.imshow(window_name, im)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         break
                     time.sleep(0.1)
                 
-                # 显示3秒后自动关闭窗口
+                # 3秒后自动关闭窗口
+                print("3秒后自动关闭活体检测窗口")
                 time.sleep(3)
                 break
             elif i_try == limit_try - 1:
-                while True:
+                # 显示失败信息
+                for i in range(30):  # 显示3秒
                     im = show_image(cam, "LIVENESS FAIL", color=(0, 0, 255))
                     if im is None:
                         break
                         
-                    cv2.imshow('liveness_detection', im)
+                    cv2.imshow(window_name, im)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         break
                     time.sleep(0.1)
                 
                 # 显示3秒后自动关闭窗口
+                print("Liveness detection failed, closing window in 3 seconds")
                 time.sleep(3)
                 break
             else:

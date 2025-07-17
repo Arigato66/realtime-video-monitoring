@@ -73,7 +73,9 @@
               <div class="control-section">
                 <h3>视频源</h3>
                 <div class="button-group">
-                  <button @click="connectWebcam" :class="{ active: activeSource === 'webcam' }">开启摄像头</button>
+                  <button @click="connectWebcam" 
+                          :class="{ active: activeSource === 'webcam' }" 
+                          :disabled="detectionMode === 'face_anti_spoofing'">开启摄像头</button>
                   <button @click="disconnectWebcam" v-if="activeSource === 'webcam'" class="disconnect-button">关闭摄像头</button>
                   <button @click="uploadVideoFile" :disabled="activeSource === 'webcam'">上传视频</button>
                 </div>
@@ -109,9 +111,13 @@
                     :class="{ active: detectionMode === 'violence_detection' }">
                     暴力检测
                   </button>
+                </div>
+                <!-- 活体检测按钮单独一行 -->
+                <div class="button-group liveness-button-group">
                   <button 
-                    @click="setDetectionMode('face_anti_spoofing')" 
-                    :class="{ active: detectionMode === 'face_anti_spoofing' }"
+                    @click="toggleFaceAntiSpoofing" 
+                    
+                    :class="{ active: detectionMode === 'face_anti_spoofing', 'liveness-button': true }"
                     data-mode="face_anti_spoofing">
                     活体检测
                   </button>
@@ -320,6 +326,18 @@ const apiFetch = async (endpoint, options = {}) => {
   }
 };
 
+// --- 检查人脸识别按钮状态的函数 ---
+const checkFaceRecognitionStatus = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/face_recognition_status`);
+    const data = await response.json();
+    return data.enabled;
+  } catch (error) {
+    console.error("获取人脸识别状态失败:", error);
+    return false;
+  }
+};
+
 // --- 检测模式管理 ---
 const loadDetectionMode = async () => {
   try {
@@ -334,6 +352,16 @@ const loadDetectionMode = async () => {
 // 在setDetectionMode函数中添加活体检测的处理
 const setDetectionMode = async (mode) => {
   if (detectionMode.value === mode) return; // 如果模式未变，则不执行任何操作
+  
+  // 如果是人脸识别模式，先检查是否启用
+  if (mode === 'face_only') {
+    const enabled = await checkFaceRecognitionStatus();
+    if (!enabled) {
+      alert('请先通过活体检测后才能使用人脸识别功能');
+      return;
+    }
+  }
+  
   try {
     const data = await apiFetch('/detection_mode', {
       method: 'POST',
@@ -388,6 +416,19 @@ const startFaceAntiSpoofing = async () => {
     }
   } catch (error) {
     // apiFetch中已处理错误
+  }
+};
+
+// 新增：切换活体检测模式
+const toggleFaceAntiSpoofing = async () => {
+  if (detectionMode.value === 'face_anti_spoofing') {
+    // 如果当前是活体检测模式，切换回目标检测模式
+    await setDetectionMode('object_detection');
+  } else {
+    // 如果当前不是活体检测模式，切换到活体检测模式
+    await setDetectionMode('face_anti_spoofing');
+    // 启动活体检测
+    startFaceAntiSpoofing();
   }
 };
 

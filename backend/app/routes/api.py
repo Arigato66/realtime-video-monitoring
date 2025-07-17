@@ -6,6 +6,10 @@ import subprocess
 import os
 import time
 import threading
+from app.services import system_state
+
+# 初始化系统状态
+system_state.FACE_RECOGNITION_ENABLED = False
 
 # 创建一个互斥锁和全局变量，用于防止多个活体检测实例同时运行
 face_anti_spoofing_lock = threading.Lock()
