@@ -20,18 +20,12 @@ import { useAuthStore } from '@/stores/auth'
 import TopBar from '@/components/TopBar.vue' 
 
 
+// 获取 Pinia 中的 auth 状态
+const authStore = useAuthStore()
 const router = useRouter()
-const route = useRoute()
-const authStore = useAuthStore()  // 获取 authStore 实例
 
-// 响应式获取用户信息（登录/登出时自动更新）
-const user = computed(() => authStore.user)
-
-// 从用户信息中提取用户名（未登录时显示“未登录”）
-const nickname = computed(() => user.value?.username || '未登录')
-
-// 角色信息（如果后端返回角色，可从 user 中获取，这里先保持“管理员”）
-const role = '管理员'  // 若后端返回角色，可改为：user.value?.role || '普通用户'
+// 解构用户信息和登录状态（响应式）
+const { user, isAuthenticated, logout } = authStore
 </script>
 
 <style scoped>

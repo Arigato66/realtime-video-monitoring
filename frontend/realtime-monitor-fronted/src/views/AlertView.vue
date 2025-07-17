@@ -1,74 +1,79 @@
 <template>
-  <div class="alert-info-page">
-    <h1>实时告警信息列表</h1>
+  <div class="app-container">
+    <!-- 添加 TopBar 组件作为顶部导航 -->
+    <TopBar />
 
-    <div class="alert-section control-section">
-      <!-- 告警统计 -->
-      <div class="alert-stats">
-        <span>当前共有 <strong>{{ alerts.length }}</strong> 条告警信息</span>
-      </div>
-      
-      <!-- 告警列表 -->
-      <div class="alerts-table-container">
-        <table class="alerts-table">
-          <thead>
-            <tr>
-              <th>监控回放</th>
-              <th>告警类型</th>
-              <th>告警地点</th>
-              <th>告警时间</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="alert in currentPageAlerts" :key="alert.id" class="alert-row">
-              <td class="alert-video">
-                <img :src="alert.snapshotUrl" alt="告警快照" class="alert-snapshot" />
-                <button @click="playVideo(alert.videoUrl)" class="play-button">
-                  <i class="fa fa-play"></i> 回放
-                </button>
-              </td>
-              <td>{{ alert.type }}</td>
-              <td>{{ alert.location }}</td>
-              <td>{{ alert.time }}</td>
-              <td>
-                <button @click="handleAlert(alert.id)" class="handle-button">
-                  <i class="fa fa-wrench"></i> 处置
-                </button>
-              </td>
-            </tr>
-            <tr v-if="!currentPageAlerts.length" class="no-alert-row">
-              <td colspan="5">
-                <div class="video-placeholder">
-                  <p>当前无告警信息</p>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      
-      <!-- 分页控件 -->
-      <div class="pagination-controls" v-if="totalPages > 1">
-        <button @click="prevPage" :disabled="currentPage === 1" class="page-button">
-          <i class="fa fa-chevron-left"></i> 上一页
-        </button>
-        
-        <div class="page-numbers">
-          <button 
-            v-for="page in pageRange" 
-            :key="page" 
-            :class="{ active: page === currentPage }"
-            @click="goToPage(page)"
-            class="page-number"
-          >
-            {{ page }}
-          </button>
+    <div class="alert-info-page">
+      <h1>实时告警信息列表</h1>
+
+      <div class="alert-section control-section">
+        <!-- 告警统计 -->
+        <div class="alert-stats">
+          <span>当前共有 <strong>{{ alerts.length }}</strong> 条告警信息</span>
         </div>
         
-        <button @click="nextPage" :disabled="currentPage === totalPages" class="page-button">
-          下一页 <i class="fa fa-chevron-right"></i>
-        </button>
+        <!-- 告警列表 -->
+        <div class="alerts-table-container">
+          <table class="alerts-table">
+            <thead>
+              <tr>
+                <th>监控回放</th>
+                <th>告警类型</th>
+                <th>告警地点</th>
+                <th>告警时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="alert in currentPageAlerts" :key="alert.id" class="alert-row">
+                <td class="alert-video">
+                  <img :src="alert.snapshotUrl" alt="告警快照" class="alert-snapshot" />
+                  <button @click="playVideo(alert.videoUrl)" class="play-button">
+                    <i class="fa fa-play"></i> 回放
+                  </button>
+                </td>
+                <td>{{ alert.type }}</td>
+                <td>{{ alert.location }}</td>
+                <td>{{ alert.time }}</td>
+                <td>
+                  <button @click="handleAlert(alert.id)" class="handle-button">
+                    <i class="fa fa-wrench"></i> 处置
+                  </button>
+                </td>
+              </tr>
+              <tr v-if="!currentPageAlerts.length" class="no-alert-row">
+                <td colspan="5">
+                  <div class="video-placeholder">
+                    <p>当前无告警信息</p>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        
+        <!-- 分页控件 -->
+        <div class="pagination-controls" v-if="totalPages > 1">
+          <button @click="prevPage" :disabled="currentPage === 1" class="page-button">
+            <i class="fa fa-chevron-left"></i> 上一页
+          </button>
+          
+          <div class="page-numbers">
+            <button 
+              v-for="page in pageRange" 
+              :key="page" 
+              :class="{ active: page === currentPage }"
+              @click="goToPage(page)"
+              class="page-number"
+            >
+              {{ page }}
+            </button>
+          </div>
+          
+          <button @click="nextPage" :disabled="currentPage === totalPages" class="page-button">
+            下一页 <i class="fa fa-chevron-right"></i>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -77,6 +82,8 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
+// 引入 TopBar 组件（根据实际路径调整）
+import TopBar from '@/components/TopBar.vue';
 
 // API端点设置
 const SERVER_ROOT_URL = 'http://localhost:5000';
@@ -221,17 +228,23 @@ onUnmounted(() => {
 </script>
 
 <style>
-/* 样式部分与之前保持一致 */
+/* 添加外层容器样式 */
+.app-container {
+  min-height: 100vh;
+  background-color: #ffffff;
+}
+
 .alert-info-page {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 20px;
+  padding: 20px; /* 与顶部导航栏保持间距 */
 }
 
 h1 {
   text-align: center;
   margin-bottom: 30px;
   color: #2c3e50;
+  margin-top: 20px; /* 增加与TopBar的距离 */
 }
 
 h3 {

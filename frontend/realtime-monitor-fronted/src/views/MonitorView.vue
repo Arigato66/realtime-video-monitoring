@@ -2,24 +2,6 @@
   <div class="app-container">
     <!-- 顶部导航栏 -->
      <TopBar />
-    <header class="top-bar">
-      <div class="header-left">
-        <h1>车站实时视频监控系统</h1>
-      </div>
-      <div class="header-right">
-        <div class="profile-info">
-          <div class="avatar">
-            <img src="https://via.placeholder.com/100" alt="用户头像">
-          </div>
-          <div class="name-role">
-            <!-- 显示登录用户名（从loginUser中获取） -->
-            <h2>{{ loginUser?.username || '未登录' }}</h2>
-            <!-- 显示角色（如果后端返回角色，否则默认管理员） -->
-            <p>{{ loginUser?.role || '管理员' }}</p>
-          </div>
-        </div>
-      </div>
-    </header>
 
     <!-- 新增：人脸注册模态框 -->
     <div v-if="showRegistrationModal" class="registration-modal-overlay">
@@ -274,7 +256,6 @@
 </template>
 
 <script setup>
-import { useRoute } from 'vue-router'
 import { ref, onMounted, onUnmounted, nextTick } from 'vue' // 移除 watch
 import io from 'socket.io-client';
 

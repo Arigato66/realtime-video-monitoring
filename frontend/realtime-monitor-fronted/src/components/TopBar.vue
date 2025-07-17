@@ -42,8 +42,11 @@
           <img src="https://via.placeholder.com/100" alt="用户头像">
         </div>
         <div class="name-role">
-          <h2>{{ nickname }}</h2>
-          <p>{{ role }}</p>
+            <!-- 显示登录用户名 -->
+            <h2>{{ userInfo.username || '未登录' }}</h2>
+            <!-- 显示角色 -->
+            <p>{{ userInfo.role || '管理员' }}</p>
+
         </div>
       </div>
       <div class="icon-group">
@@ -58,14 +61,21 @@
 import { ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 // 引入所需的 ElementPlus 图标
-import { House, UserFilled, VideoCameraFilled, BellFilled, Setting, QuestionFilled} from '@element-plus/icons-vue'
+import { House, UserFilled, VideoCameraFilled, BellFilled, Setting, QuestionFilled,logout } from '@element-plus/icons-vue'
+import { useAuthStore } from '@/stores/auth' // 引入 Pinia
+
 
 const router = useRouter()
 const route = useRoute()
 const currentPath = ref(route.path)
 
-const role = ref('管理员')
-const nickname = ref('张三')
+// 新增：从 Pinia 获取用户信息（替代原来的 userInfo ref 对象）
+const authStore = useAuthStore()
+// 直接使用 Pinia 中的 user 数据，无需重复声明
+const userInfo = authStore.user
+
+
+
 
 const goToPage = (path: string) => {
   router.push(path)
@@ -77,6 +87,8 @@ const logout = () => {
   localStorage.removeItem('userInfo')
   router.replace('/')
 }
+
+
 </script>
 
 <style scoped>

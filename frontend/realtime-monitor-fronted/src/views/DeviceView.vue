@@ -1,77 +1,82 @@
 <template>
-  <div class="device-page">
-    <h1>设备信息列表</h1>
+  <div class="app-container">
+    <!-- 添加 TopBar 组件作为页面顶部导航 -->
+    <TopBar />
 
-    <div class="device-section control-section">
-      <!-- 设备统计 -->
-      <div class="device-stats">
-        <span>当前共有 <strong>{{ devices.length }}</strong> 台设备 | 
-        正常: <span class="status-normal">{{ normalCount }}</span> 台 | 
-        异常: <span class="status-abnormal">{{ abnormalCount }}</span> 台</span>
-      </div>
-      
-      <!-- 设备列表 -->
-      <div class="devices-table-container">
-        <table class="devices-table">
-          <thead>
-            <tr>
-              <th>设备ID</th>
-              <th>设备型号</th>
-              <th>设备位置</th>
-              <th>设备年限</th>
-              <th>设备状态</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="device in currentPageDevices" :key="device.id" class="device-row">
-              <td>{{ device.id }}</td>
-              <td>{{ device.model }}</td>
-              <td>{{ device.location }}</td>
-              <td>{{ device.years }} 年</td>
-              <td>
-                <span :class="`status-badge ${device.status === '正常' ? 'status-normal' : 'status-abnormal'}`">
-                  {{ device.status }}
-                </span>
-              </td>
-              <td>
-                <button @click="viewDeviceStream(device.id)" class="view-button">
-                  <i class="fa fa-eye"></i> 查看
-                </button>
-              </td>
-            </tr>
-            <tr v-if="!currentPageDevices.length" class="no-device-row">
-              <td colspan="6">
-                <div class="video-placeholder">
-                  <p>当前无设备信息</p>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      
-      <!-- 分页控件 -->
-      <div class="pagination-controls" v-if="totalPages > 1">
-        <button @click="prevPage" :disabled="currentPage === 1" class="page-button">
-          <i class="fa fa-chevron-left"></i> 上一页
-        </button>
-        
-        <div class="page-numbers">
-          <button 
-            v-for="page in pageRange" 
-            :key="page" 
-            :class="{ active: page === currentPage }"
-            @click="goToPage(page)"
-            class="page-number"
-          >
-            {{ page }}
-          </button>
+    <div class="device-page">
+      <h1>设备信息列表</h1>
+
+      <div class="device-section control-section">
+        <!-- 设备统计 -->
+        <div class="device-stats">
+          <span>当前共有 <strong>{{ devices.length }}</strong> 台设备 | 
+          正常: <span class="status-normal">{{ normalCount }}</span> 台 | 
+          异常: <span class="status-abnormal">{{ abnormalCount }}</span> 台</span>
         </div>
         
-        <button @click="nextPage" :disabled="currentPage === totalPages" class="page-button">
-          下一页 <i class="fa fa-chevron-right"></i>
-        </button>
+        <!-- 设备列表 -->
+        <div class="devices-table-container">
+          <table class="devices-table">
+            <thead>
+              <tr>
+                <th>设备ID</th>
+                <th>设备型号</th>
+                <th>设备位置</th>
+                <th>设备年限</th>
+                <th>设备状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="device in currentPageDevices" :key="device.id" class="device-row">
+                <td>{{ device.id }}</td>
+                <td>{{ device.model }}</td>
+                <td>{{ device.location }}</td>
+                <td>{{ device.years }} 年</td>
+                <td>
+                  <span :class="`status-badge ${device.status === '正常' ? 'status-normal' : 'status-abnormal'}`">
+                    {{ device.status }}
+                  </span>
+                </td>
+                <td>
+                  <button @click="viewDeviceStream(device.id)" class="view-button">
+                    <i class="fa fa-eye"></i> 查看
+                  </button>
+                </td>
+              </tr>
+              <tr v-if="!currentPageDevices.length" class="no-device-row">
+                <td colspan="6">
+                  <div class="video-placeholder">
+                    <p>当前无设备信息</p>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        
+        <!-- 分页控件 -->
+        <div class="pagination-controls" v-if="totalPages > 1">
+          <button @click="prevPage" :disabled="currentPage === 1" class="page-button">
+            <i class="fa fa-chevron-left"></i> 上一页
+          </button>
+          
+          <div class="page-numbers">
+            <button 
+              v-for="page in pageRange" 
+              :key="page" 
+              :class="{ active: page === currentPage }"
+              @click="goToPage(page)"
+              class="page-number"
+            >
+              {{ page }}
+            </button>
+          </div>
+          
+          <button @click="nextPage" :disabled="currentPage === totalPages" class="page-button">
+            下一页 <i class="fa fa-chevron-right"></i>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -80,6 +85,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
+import TopBar from '@/components/TopBar.vue'
 
 // 定义设备信息类型接口（解决TS类型报错）
 interface Device {
