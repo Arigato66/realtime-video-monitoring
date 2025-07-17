@@ -1,6 +1,7 @@
 <template>
   <div class="app-container">
     <!-- 顶部导航栏 -->
+     <TopBar />
     <header class="top-bar">
       <div class="header-left">
         <h1>车站实时视频监控系统</h1>
@@ -72,6 +73,11 @@
                 <input type="checkbox" v-model="rtmpConfig.detection_modes" value="smoking_detection" />
                 抽烟检测
               </label>
+              <!-- 新增暴力检测选项 -->
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="rtmpConfig.detection_modes" value="violence_detection" />
+                暴力检测
+              </label>
             </div>
           </div>
         </div>
@@ -86,9 +92,6 @@
     </div>
 
     <div class="main-content">
-      <!-- 引入复用的侧边栏组件 -->
-      <Sidebar :currentPath="currentPath" />
-
       <!-- 主内容区域 - 实时视频监控系统内容 -->
       <main class="content-area">
         <div class="monitor-page">
@@ -99,47 +102,35 @@
               <h2>监控视图</h2>
               <div class="video-wrapper">
 
-                <!-- V3: 统一的图像显示，使用 ref 来引用 -->
-                <img 
-                  v-if="activeSource === 'webcam' || activeSource === 'rtmp' || (activeSource === 'upload' && isImageUrl(videoSource))"
-                  ref="displayImage"
-                  :src="videoSource" 
-                  alt="实时或上传画面" 
-                  class="webcam-feed"
-                  @load="onImageLoad"
-                />
 
-                <!-- 上传的视频 -->
-                <video 
-                  v-else-if="activeSource === 'upload' && isVideoUrl(videoSource)" 
-                  :src="videoSource" 
-                  controls 
-                  autoplay
-                ></video>
+                <!-- Case 1: Webcam is active -->
+                <img v-if="activeSource === 'webcam'" ref="webcamImg" alt="摄像头实时画面" class="webcam-feed" />
+                
+                <!-- Case 2: RTMP流显示 - 使用Canvas -->
+                <canvas v-else-if="activeSource === 'rtmp'" 
+                        ref="rtmpCanvas" 
+                        class="rtmp-canvas" 
+                        :width="canvasWidth" 
+                        :height="canvasHeight">
+                </canvas>
+                
+                <!-- Case 3: Upload显示 -->
+                <template v-else-if="activeSource === 'upload'">
+                  <img v-if="isImageUrl(videoSource)" :src="videoSource" alt="上传的图像" />
+                  <video v-else-if="isVideoUrl(videoSource)" :src="videoSource" controls autoplay></video>
+                </template>
 
-                <!-- 加载状态 -->
-          <div v-else-if="activeSource === 'loading'" class="loading-state">
-            <p>正在处理文件，请稍候...</p>
-            <div class="loading-spinner"></div>
-          </div>
-          
-                <!-- 默认占位符 -->
-          <div v-else class="video-placeholder">
-            <p>加载中或未连接视频源</p>
-          </div>
-  
-                <!-- V3: 用于危险区域交互的Canvas，仅在编辑模式下显示 -->
-                <canvas
-                  v-if="editMode"
-                  ref="interactionCanvas"
-                  class="interaction-canvas"
-                  @mousedown="handleMouseDown"
-                  @mousemove="handleMouseMove"
-                  @mouseup="handleMouseUp"
-                  @mouseleave="handleMouseLeave"
-                  @dblclick="handleDoubleClick"
-                  @contextmenu.prevent="handleRightClick"
-                ></canvas>
+                <!-- Case 4: Loading -->
+                <div v-else-if="activeSource === 'loading'" class="loading-state">
+                  <p>正在处理文件，请稍候...</p>
+                  <div class="loading-spinner"></div>
+                </div>
+                
+                <!-- Case 5: Default placeholder -->
+                <div v-else class="video-placeholder">
+                  <p>加载中或未连接视频源</p>
+                </div>
+
         </div>
       </div>
       
@@ -288,14 +279,14 @@ import { ref, onMounted, onUnmounted, nextTick } from 'vue' // 移除 watch
 import io from 'socket.io-client';
 
 // 导入侧边栏组件
-import Sidebar from '../components/Sidebar.vue'
+import TopBar from '../components/TopBar.vue'
 
 // 当前路径状态
 const currentPath = ref('')
 
 // API端点设置
-const SERVER_ROOT_URL = 'http://localhost:5000'
-const API_BASE_URL = `${SERVER_ROOT_URL}/api`
+const SERVER_ROOT_URL = '' // 使用相对路径
+const API_BASE_URL = '/api'
 const DLIB_API_BASE_URL = `${API_BASE_URL}/dlib`; // 新的 Dlib API 基础路径
 const VIDEO_FEED_URL = `${API_BASE_URL}/video_feed`
 
@@ -335,6 +326,17 @@ const interactionCanvas = ref(null);
 const dangerZone = ref([]); // 用于存储和操作危险区域的点
 const isDragging = ref(false);
 const draggingIndex = ref(-1);
+
+// 新增Canvas相关变量
+const rtmpCanvas = ref(null)
+let canvasContext = null
+let currentDetections = []
+
+// 添加Canvas尺寸状态
+const canvasWidth = ref(1280)  // 默认1280
+const canvasHeight = ref(720)  // 默认720
+const originalWidth = ref(1280)  // 原始视频宽度
+const originalHeight = ref(720)  // 原始视频高度
 
 // 新增：RTMP流相关状态
 const showRtmpConnectionModal = ref(false)
@@ -972,33 +974,114 @@ const selectRtmpStream = (streamId) => {
   currentRtmpStream.value = streamId
   // 切换到RTMP流显示
   activeSource.value = 'rtmp'
-  videoSource.value = `${API_BASE_URL}/streams/${streamId}/feed?t=${new Date().getTime()}`
   
-  // 开始接收该流的检测结果
-  connectToRtmpSocket(streamId)
+  // 确保Canvas正确初始化
+  nextTick(() => {
+    if (rtmpCanvas.value) {
+      canvasContext = rtmpCanvas.value.getContext('2d')
+      console.log('Canvas上下文初始化成功')
+      
+      // 在Canvas初始化后再连接Socket
+      setTimeout(() => {
+        connectToRtmpSocket(streamId)
+      }, 100)
+    } else {
+      console.error('Canvas元素未找到')
+    }
+  })
 }
 
 const connectToRtmpSocket = (streamId) => {
+  // 先断开现有连接
   if (rtmpSocket.value) {
     rtmpSocket.value.disconnect()
+    rtmpSocket.value = null
   }
   
-  rtmpSocket.value = io(`${SERVER_ROOT_URL}/rtmp`)
+  console.log(`正在连接RTMP Socket，流ID: ${streamId}`)
   
-  rtmpSocket.value.on('connect', () => {
-    console.log('已连接到RTMP WebSocket')
-    rtmpSocket.value.emit('join_stream', { stream_id: streamId })
+  // 修改连接配置 - 允许WebSocket优先
+  rtmpSocket.value = io('/rtmp', {
+    transports: ['websocket', 'polling'],  // WebSocket优先，polling作为备选
+    forceNew: true,
+    timeout: 20000,
+    reconnection: true,
+    reconnectionAttempts: 5,
+    reconnectionDelay: 1000
   })
   
-  rtmpSocket.value.on('detection_result', (data) => {
+  rtmpSocket.value.on('connect', () => {
+    console.log(`✅ 已连接到RTMP WebSocket，流ID: ${streamId}`)
+    console.log('Socket ID:', rtmpSocket.value.id)
+    console.log('传输方式:', rtmpSocket.value.io.engine.transport.name)  // 添加这行来检查传输方式
+    rtmpSocket.value.emit('join_stream', { stream_id: streamId })
+    console.log(`📤 已发送join_stream事件，流ID: ${streamId}`)
+  })
+  
+  rtmpSocket.value.on('connect_error', (error) => {
+    console.error('❌ Socket连接错误:', error)
+  })
+  
+  rtmpSocket.value.on('status', (data) => {
+    console.log('📊 RTMP状态:', data)
+  })
+  
+  let frameCount = 0
+  rtmpSocket.value.on('video_frame', (data) => {
+    frameCount++
+    console.log(`📺 收到video_frame事件，帧数: ${frameCount}, 流ID: ${data.stream_id}`)
+    
+    if (data.stream_id === currentRtmpStream.value && canvasContext && rtmpCanvas.value) {
+        // 动态更新Canvas和原始尺寸
+        if (data.original_width && data.original_height) {
+          // 更新原始尺寸
+          originalWidth.value = data.original_width
+          originalHeight.value = data.original_height
+          
+          // 更新Canvas尺寸为原始尺寸
+          canvasWidth.value = data.original_width
+          canvasHeight.value = data.original_height
+          
+          // 更新Canvas元素的实际尺寸
+          rtmpCanvas.value.width = data.original_width
+          rtmpCanvas.value.height = data.original_height
+          
+          console.log(`📐 Canvas尺寸已更新为: ${data.original_width}x${data.original_height}`)
+        }
+        
+        if (data.frame_data) {
+          drawVideoFrame(data.frame_data)
+          console.log(`✅ 成功绘制第${frameCount}帧`)
+        } else {
+          console.error('❌ 收到的帧数据为空')
+        }
+      }
+  })
+  
+  // 接收AI检测结果
+  rtmpSocket.value.on('ai_result', (data) => {
+    console.log('🔍 收到AI检测结果:', data)
     if (data.stream_id === currentRtmpStream.value) {
-      // 更新检测结果和告警
+      currentDetections = data.detections || []
       alerts.value = data.alerts || []
+      
+      if (canvasContext && rtmpCanvas.value) {
+        drawDetectionResults(currentDetections)
+      }
     }
   })
   
+  // 添加测试事件监听
+  rtmpSocket.value.on('test_event', (data) => {
+    console.log('🧪 收到测试事件:', data)
+  })
+  
   rtmpSocket.value.on('error', (error) => {
-    console.error('RTMP WebSocket错误:', error)
+    console.error('❌ RTMP WebSocket错误:', error)
+  })
+  
+  rtmpSocket.value.on('disconnect', (reason) => {
+    console.log('🔌 RTMP WebSocket断开连接，原因:', reason)
   })
 }
 
@@ -1078,98 +1161,152 @@ const deleteRtmpStream = async (streamId) => {
   }
 }
 
-// --- V3: Canvas 交互事件处理 ---
 
-// 获取鼠标在Canvas上的坐标（处理缩放）
-const getMouseCoords = (event) => {
-  const canvas = interactionCanvas.value;
-  if (!canvas) return null;
-
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-
-  const x = (event.clientX - rect.left) * scaleX;
-  const y = (event.clientY - rect.top) * scaleY;
-
-  return { x, y };
-};
-
-// 鼠标按下
-const handleMouseDown = (event) => {
-  if (!editMode.value) return;
-  const coords = getMouseCoords(event);
-  if (!coords) return;
-
-  for (let i = 0; i < dangerZone.value.length; i++) {
-    const point = dangerZone.value[i];
-    const distance = Math.sqrt(Math.pow(coords.x - point[0], 2) + Math.pow(coords.y - point[1], 2));
-    if (distance < 10) {
-      isDragging.value = true;
-      draggingIndex.value = i;
-      return;
+// 绘制视频帧到Canvas
+const drawVideoFrame = (frameData) => {
+  try {
+    if (!canvasContext || !rtmpCanvas.value) {
+      console.warn('⚠️ Canvas未准备好，跳过帧绘制')
+      return
     }
-  }
-};
-
-// 鼠标移动
-const handleMouseMove = (event) => {
-  if (!isDragging.value || draggingIndex.value === -1) return;
-  let coords = getMouseCoords(event);
-  if (!coords) return;
-  
-  const canvas = interactionCanvas.value;
-  coords.x = Math.max(0, Math.min(coords.x, canvas.width));
-  coords.y = Math.max(0, Math.min(coords.y, canvas.height));
-  
-  dangerZone.value[draggingIndex.value] = [coords.x, coords.y];
-  drawCanvas();
-};
-
-// 鼠标松开
-const handleMouseUp = () => {
-  isDragging.value = false;
-  draggingIndex.value = -1;
-};
-
-// 鼠标移出Canvas
-const handleMouseLeave = () => {
-  if (isDragging.value) {
-    isDragging.value = false;
-    draggingIndex.value = -1;
-  }
-};
-
-// 双击添加点
-const handleDoubleClick = (event) => {
-  if (!editMode.value) return;
-  let coords = getMouseCoords(event);
-  if (!coords) return;
-  
-  const canvas = interactionCanvas.value;
-  coords.x = Math.max(0, Math.min(coords.x, canvas.width));
-  coords.y = Math.max(0, Math.min(coords.y, canvas.height));
-
-  dangerZone.value.push([coords.x, coords.y]);
-  drawCanvas();
-};
-
-// 右键删除点
-const handleRightClick = (event) => {
-  if (!editMode.value) return;
-  const coords = getMouseCoords(event);
-  if (!coords) return;
-  
-  for (let i = dangerZone.value.length - 1; i >= 0; i--) {
-    const point = dangerZone.value[i];
-    const distance = Math.sqrt(Math.pow(coords.x - point[0], 2) + Math.pow(coords.y - point[1], 2));
-    if (distance < 10) {
-      dangerZone.value.splice(i, 1);
-      drawCanvas();
-      return;
+    
+    if (!frameData) {
+      console.error('❌ 帧数据为空')
+      return
     }
+    
+    // 确保frameData是ArrayBuffer或Uint8Array
+    let binaryData
+    if (frameData instanceof ArrayBuffer) {
+      binaryData = frameData
+    } else if (frameData instanceof Uint8Array) {
+      binaryData = frameData.buffer
+    } else if (typeof frameData === 'object' && frameData.data) {
+      // 处理可能的Buffer对象
+      binaryData = new Uint8Array(frameData.data).buffer
+    } else {
+      console.error('❌ 不支持的帧数据格式:', typeof frameData)
+      return
+    }
+    
+    // 将二进制数据转换为Blob
+    const blob = new Blob([binaryData], { type: 'image/jpeg' })
+    
+    // 创建临时URL
+    const imageUrl = URL.createObjectURL(blob)
+    
+    // 创建Image对象
+    const img = new Image()
+    img.onload = () => {
+      try {
+        // 清除Canvas
+        canvasContext.clearRect(0, 0, rtmpCanvas.value.width, rtmpCanvas.value.height)
+        
+        // 绘制图像到Canvas
+        canvasContext.drawImage(img, 0, 0, rtmpCanvas.value.width, rtmpCanvas.value.height)
+        
+        // 绘制检测结果
+        drawDetectionResults(currentDetections)
+        
+        // 释放临时URL
+        URL.revokeObjectURL(imageUrl)
+      } catch (drawError) {
+        console.error('❌ 绘制图像到Canvas失败:', drawError)
+      }
+    }
+    
+    img.onerror = () => {
+      console.error('❌ 图像加载失败')
+      URL.revokeObjectURL(imageUrl)
+    }
+    
+    img.src = imageUrl
+    
+  } catch (error) {
+    console.error('❌ 绘制视频帧错误:', error)
   }
-};
+}
+
+// 在Canvas上绘制AI检测结果
+const drawDetectionResults = (detections) => {
+  if (!canvasContext || !detections || detections.length === 0) return
+  
+  detections.forEach(detection => {
+    const { type, bbox, confidence, message, keypoints } = detection
+    const [x1, y1, x2, y2] = bbox
+    
+    // 设置样式
+    canvasContext.strokeStyle = type === 'fall' ? '#ff0000' : 
+                               type === 'pose' ? '#00ff00' : 
+                               type === 'object' ? '#00ff00' : '#0099ff'
+    canvasContext.lineWidth = 2
+    canvasContext.fillStyle = type === 'fall' ? '#ff0000' : 
+                             type === 'pose' ? '#00ff00' : 
+                             type === 'object' ? '#00ff00' : '#0099ff'
+    canvasContext.font = '14px Arial'
+    
+    // 绘制边界框
+    canvasContext.strokeRect(x1, y1, x2 - x1, y2 - y1)
+    
+    // 绘制标签
+    const label = `${message || type} (${(confidence * 100).toFixed(1)}%)`
+    const textWidth = canvasContext.measureText(label).width
+    
+    // 绘制标签背景
+    canvasContext.fillRect(x1, y1 - 25, textWidth + 10, 20)
+    
+    // 绘制标签文字
+    canvasContext.fillStyle = '#ffffff'
+    canvasContext.fillText(label, x1 + 5, y1 - 10)
+    
+    // 如果是姿态检测，绘制关键点和骨架
+    if ((type === 'fall' || type === 'pose') && keypoints) {
+      drawPoseKeypoints(keypoints)
+    }
+  })
+}
+
+// 新增：绘制人体关键点和骨架的函数
+const drawPoseKeypoints = (keypoints) => {
+  if (!canvasContext || !keypoints) return
+  
+  // YOLO姿态关键点连接定义（17个关键点）
+  const connections = [
+    [0, 1], [0, 2], [1, 3], [2, 4],  // 头部
+    [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],  // 手臂
+    [5, 11], [6, 12], [11, 12],  // 躯干
+    [11, 13], [13, 15], [12, 14], [14, 16]  // 腿部
+  ]
+  
+  // 绘制骨架连接
+  canvasContext.strokeStyle = '#ff6b6b'
+  canvasContext.lineWidth = 2
+  
+  connections.forEach(([start, end]) => {
+    if (start < keypoints.length && end < keypoints.length) {
+      const startPoint = keypoints[start]
+      const endPoint = keypoints[end]
+      
+      // 检查关键点是否可见（置信度 > 0.5）
+      if (startPoint[2] > 0.5 && endPoint[2] > 0.5) {
+        canvasContext.beginPath()
+        canvasContext.moveTo(startPoint[0], startPoint[1])
+        canvasContext.lineTo(endPoint[0], endPoint[1])
+        canvasContext.stroke()
+      }
+    }
+  })
+  
+  // 绘制关键点
+  canvasContext.fillStyle = '#4ecdc4'
+  keypoints.forEach((point, index) => {
+    if (point[2] > 0.5) {  // 置信度阈值
+      canvasContext.beginPath()
+      canvasContext.arc(point[0], point[1], 4, 0, 2 * Math.PI)
+      canvasContext.fill()
+    }
+  })
+}
 
 
 // 生命周期钩子
@@ -1881,5 +2018,14 @@ onUnmounted(() => {
 
 .stream-controls .delete-button:hover {
   background-color: #c82333;
+}
+
+/* 新增Canvas样式 */
+.rtmp-canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background-color: #000;
+  border: 1px solid #444;
 }
 </style>

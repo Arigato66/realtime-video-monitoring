@@ -10,7 +10,7 @@ class SocketService {
     }
 
     connect() {
-        const serverUrl = process.env.VUE_APP_SOCKET_URL || 'http://localhost:5000'
+        const serverUrl = process.env.VUE_APP_SOCKET_URL || ''
 
         this.socket = io(`${serverUrl}/video`, {
             transports: ['websocket'],

@@ -1,12 +1,13 @@
 import axios from 'axios'
 
-const API_URL = 'http://localhost:5000/api/v1.0'
+// 简化：直接使用相对路径
+const API_URL = '/api/v1.0'
 
 export const authApi = {
-  register(userData) {
+  register: (userData) => {
     return axios.post(`${API_URL}/signin`, userData)
   },
-  login(credentials) {
+  login: (credentials) => {
     return axios.post(`${API_URL}/login`, credentials)
   }
 }

@@ -68,8 +68,9 @@ def create_stream():
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 
-@rtmp_bp.route('/streams', methods=['GET'])
+@rtmp_bp.route('/streams', methods=['GET'])  # 修改这里：从 @app.route 改为 @rtmp_bp.route
 def list_streams():
+
     """
     获取所有视频流列表
     ---
@@ -102,8 +103,9 @@ def list_streams():
               type: string
     """
     try:
-        streams = rtmp_manager.get_all_streams()
-        return jsonify(streams), 200
+        # 修复：使用正确的方法名
+        streams = rtmp_manager.list_streams()  # 而不是 get_all_streams()
+        return jsonify(streams)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
