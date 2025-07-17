@@ -7,7 +7,7 @@ from werkzeug.utils import secure_filename
 from app.services.detection import process_image, process_video
 from app.services.video import video_feed, stop_video_feed_service
 from app.services.alerts import reset_alerts
-
+#11w1w
 # 创建视频蓝图
 video_bp = Blueprint('video', __name__, url_prefix='/api')
 
