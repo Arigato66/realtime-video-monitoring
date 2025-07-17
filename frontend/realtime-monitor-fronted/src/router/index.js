@@ -5,7 +5,7 @@ const router = createRouter({
   routes: [
     {
     path: '/', // 根路径
-    redirect: '/login' // 访问根路径时，自动跳转到登录页路径
+    redirect: '/home' // 访问根路径时，自动跳转到登录页路径
     },
     {
       path: '/home',
