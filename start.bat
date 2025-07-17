@@ -4,8 +4,8 @@ echo ====================================
 
 :: 启动后端API服务
 call conda init
-call conda activate video_monitor_final || (
-    echo 错误: 无法激活 conda 环境 "video_monitor_final"
+call conda activate final || (
+    echo 错误: 无法激活 conda 环境 "final"
     pause
     exit /b 1
 )
