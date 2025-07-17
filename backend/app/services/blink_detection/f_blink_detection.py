@@ -1,4 +1,4 @@
-import config as cfg
+from app.services import config as cfg
 import dlib
 import cv2
 import numpy as np

@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
-import config as cfg
-import f_utils
+from app.services import config as cfg
+from app.services import f_utils
 
 def detect(img, cascade):
     rects,_,confidence = cascade.detectMultiScale3(img, scaleFactor=1.3, minNeighbors=4, minSize=(30, 30),

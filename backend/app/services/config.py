@@ -1,10 +1,15 @@
+import os
+
+# Get the absolute path to the app directory
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # -------------------------------------- profile_detection ---------------------------------------
-detect_frontal_face = 'profile_detection/haarcascades/haarcascade_frontalface_alt.xml'
-detect_perfil_face = 'profile_detection/haarcascades/haarcascade_profileface.xml'
+detect_frontal_face = os.path.join(APP_DIR, 'services', 'profile_detection', 'haarcascades', 'haarcascade_frontalface_alt.xml')
+detect_perfil_face = os.path.join(APP_DIR, 'services', 'profile_detection', 'haarcascades', 'haarcascade_profileface.xml')
 
 # -------------------------------------- emotion_detection ---------------------------------------
 # modelo de deteccion de emociones
-path_model = 'emotion_detection/Modelos/model_dropout.hdf5'
+path_model = os.path.join(APP_DIR, 'services', 'emotion_detection', 'Modelos', 'model_dropout.hdf5')
 # Parametros del modelo, la imagen se debe convertir a una de tamaño 48x48 en escala de grises
 w,h = 48,48
 rgb = False
@@ -17,4 +22,4 @@ EYE_AR_THRESH = 0.23 #baseline
 EYE_AR_CONSEC_FRAMES = 1
 
 # eye landmarks
-eye_landmarks = "blink_detection/model_landmarks/shape_predictor_68_face_landmarks.dat"
+eye_landmarks = os.path.join(APP_DIR, 'services', 'blink_detection', 'model_landmarks', 'shape_predictor_68_face_landmarks.dat')

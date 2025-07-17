@@ -109,6 +109,11 @@
                     :class="{ active: detectionMode === 'violence_detection' }">
                     暴力检测
                   </button>
+                  <button 
+                    @click="setDetectionMode('face_anti_spoofing')" 
+                    :class="{ active: detectionMode === 'face_anti_spoofing' }">
+                    活体检测
+                  </button>
                 </div>
               </div>
                <!-- 在检测模式和危险区域设置之间插入 -->
@@ -338,14 +343,14 @@ const setDetectionMode = async (mode) => {
     
     // 创建一个映射来获取模式的中文名
     const modeNames = {
-      'object_detection': 'Object Detection',
-      'face_only': 'Face Recognition',
-      'fall_detection': 'Fall Detection',
-      'smoking_detection': 'Smoking Detection',
-      'violence_detection': 'Violence Detection',
-      'face_anti_spoofing': 'Face Anti-Spoofing'
+      'object_detection': '目标检测',
+      'face_only': '人脸识别',
+      'fall_detection': '跌倒检测',
+      'smoking_detection': '抽烟检测',
+      'violence_detection': '暴力检测',
+      'face_anti_spoofing': '活体检测'
     };
-    alert(`Detection mode switched to: ${modeNames[mode] || mode}`);
+    alert(`检测模式已切换为: ${modeNames[mode] || mode}`);
 
     // 如果是活体检测模式，启动活体检测服务
     if (mode === 'face_anti_spoofing') {

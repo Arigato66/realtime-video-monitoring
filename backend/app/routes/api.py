@@ -1,10 +1,11 @@
 from flask import Blueprint, jsonify, request
 from app import socketio
-from flask_socketio import emit, request as socketio_request
+from flask_socketio import emit
 from app.services import real_time_detection
 import subprocess
 import os
 import time
+import threading
 
 # Create API blueprint
 api_bp = Blueprint('api', __name__, url_prefix='/api')
@@ -79,11 +80,9 @@ def start_face_anti_spoofing():
               example: Face anti-spoofing started
     """
     try:
-        # 导入活体检测函数
+        # 导入活体检测函数和模型下载函数
         from app.services.face_anti_spoofing import run_face_anti_spoofing
-        
-        # 使用线程运行活体检测，避免阻塞API响应
-        import threading
+        from app.services.download_models import download_required_models
         
         # 确保之前的视频流已停止
         from app.services.video import stop_video_feed_service
@@ -92,8 +91,19 @@ def start_face_anti_spoofing():
         # 等待资源释放
         time.sleep(1)
         
+        # 先下载所需的模型文件
+        def download_and_run():
+            try:
+                # 下载所需模型
+                download_required_models()
+                
+                # 启动活体检测
+                run_face_anti_spoofing()
+            except Exception as e:
+                print(f"活体检测过程中出现错误: {str(e)}")
+        
         # 启动活体检测线程
-        thread = threading.Thread(target=run_face_anti_spoofing)
+        thread = threading.Thread(target=download_and_run)
         thread.daemon = True  # 设置为守护线程，主程序退出时自动结束
         thread.start()
         
@@ -110,9 +120,9 @@ def start_face_anti_spoofing():
 # Scream detection WebSocket route
 @socketio.on('scream_detect', namespace='/api/scream_ws')
 def handle_scream_detect(message):
-    # 在Flask-SocketIO中，我们可以直接使用flask_socketio.request.sid
-    from flask_socketio import request as socketio_request
-    sid = socketio_request.sid  # Get current client session id
+    # 在Flask-SocketIO中，我们可以通过连接ID发送消息
+    # 但不使用request.sid，而是直接使用None让socketio广播给所有客户端
+    sid = None
     action = message.get('action')
     if action == 'start':
         def ws_callback(result):
