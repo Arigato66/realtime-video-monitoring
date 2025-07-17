@@ -1,0 +1,58 @@
+# 工作流的名称，会显示在GitHub的Actions页面上
+name: Deploy Frontend to Server
+
+# 触发工作流的条件
+on:
+  # 当有代码推送到 默认zjz-branch 分支时
+  push:
+    branches:
+      - zjz-branch
+    # 并且，只有当 frontend 目录或其子目录下的文件发生变动时才触发
+    paths:
+      - 'frontend/**'
+
+# 定义工作流中要执行的任务
+jobs:
+  # 定义一个名为 build-and-deploy 的任务
+  build-and-deploy:
+    # 指定运行此任务的虚拟机环境，我们使用最新的Ubuntu系统
+    runs-on: ubuntu-latest
+
+    # 定义这个任务中要执行的一系列步骤
+    steps:
+      # 第一步：检出代码
+      # 作用：将你的仓库代码完整地下载到GitHub提供的临时虚拟机中
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 第二步：设置 Node.js 环境
+      # 作用：在虚拟机里安装指定版本的Node.js，为构建前端项目做准备
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # 关键修改：将版本号从 '18' 提升到 '20'
+          # 版本 '20' 是一个长期支持(LTS)版本，且满足你所有依赖的要求
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/realtime-monitor-fronted/package-lock.json
+
+      - name: Install Dependencies and Build
+        run: |
+          cd frontend/realtime-monitor-fronted
+          
+          # 关键新增：在安装前，设置npm使用淘宝镜像源
+          npm config set registry https://registry.npmmirror.com
+
+          # 继续执行安装和构建
+          npm install
+          npm run build
+
+      - name: Deploy to Server via rsync
+        uses: Burnett01/rsync-deployments@7.0.2
+        with:
+          switches: -avzr --delete
+          path: frontend/realtime-monitor-fronted/dist/
+          remote_path: ${{ secrets.TARGET_DIR }}
+          remote_host: ${{ secrets.SERVER_HOST }}
+          remote_user: ${{ secrets.SERVER_USERNAME }}
+          remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
