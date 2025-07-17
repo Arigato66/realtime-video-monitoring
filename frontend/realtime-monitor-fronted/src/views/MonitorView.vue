@@ -325,6 +325,7 @@ const loadDetectionMode = async () => {
   }
 };
 
+// 在setDetectionMode函数中添加活体检测的处理
 const setDetectionMode = async (mode) => {
   if (detectionMode.value === mode) return; // 如果模式未变，则不执行任何操作
   try {
@@ -337,14 +338,32 @@ const setDetectionMode = async (mode) => {
     
     // 创建一个映射来获取模式的中文名
     const modeNames = {
-      'object_detection': '目标检测',
-      'face_only': '纯人脸识别',
-      'fall_detection': '跌倒检测',
-      'smoking_detection': '抽烟检测',
-      'violence_detection': '暴力检测'
+      'object_detection': 'Object Detection',
+      'face_only': 'Face Recognition',
+      'fall_detection': 'Fall Detection',
+      'smoking_detection': 'Smoking Detection',
+      'violence_detection': 'Violence Detection',
+      'face_anti_spoofing': 'Face Anti-Spoofing'
     };
-    alert(`检测模式已切换为: ${modeNames[mode] || mode}`);
+    alert(`Detection mode switched to: ${modeNames[mode] || mode}`);
 
+    // 如果是活体检测模式，启动活体检测服务
+    if (mode === 'face_anti_spoofing') {
+      startFaceAntiSpoofing();
+    }
+
+    console.log(data.message);
+  } catch (error) {
+    // apiFetch中已处理错误
+  }
+};
+
+// 添加启动活体检测的函数
+const startFaceAntiSpoofing = async () => {
+  try {
+    const data = await apiFetch('/start_face_anti_spoofing', {
+      method: 'POST'
+    });
     console.log(data.message);
   } catch (error) {
     // apiFetch中已处理错误

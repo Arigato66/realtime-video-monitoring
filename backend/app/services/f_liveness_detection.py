@@ -1,82 +1,94 @@
-import cv2
-import imutils
-import f_utils
-import dlib
 import numpy as np
-from profile_detection import f_detector
-from emotion_detection import f_emotion_detection
-from blink_detection import f_blink_detection
+import cv2
+import dlib
+from scipy.spatial import distance as dist
 
+# 初始化dlib的人脸检测器和关键点预测器
+detector = dlib.get_frontal_face_detector()
+import os
+# 获取当前文件所在目录的路径
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# 获取项目根目录的路径
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
+# 构建预测器文件的完整路径
+predictor_path = os.path.join(project_root, "shape_predictor_68_face_landmarks.dat")
+predictor = dlib.shape_predictor(predictor_path)
 
-# instaciar detectores
-frontal_face_detector    = dlib.get_frontal_face_detector()
-profile_detector         = f_detector.detect_face_orientation()
-emotion_detector         = f_emotion_detection.predict_emotions()
-blink_detector           = f_blink_detection.eye_blink_detector() 
+# 定义眼睛的索引
+(lStart, lEnd) = (42, 48)  # 左眼的关键点索引
+(rStart, rEnd) = (36, 42)  # 右眼的关键点索引
 
+def eye_aspect_ratio(eye):
+    # 计算眼睛的纵横比
+    A = dist.euclidean(eye[1], eye[5])  # 垂直距离
+    B = dist.euclidean(eye[2], eye[4])  # 垂直距离
+    C = dist.euclidean(eye[0], eye[3])  # 水平距离
+    ear = (A + B) / (2.0 * C)  # 眼睛纵横比
+    return ear
 
-
-def detect_liveness(im,COUNTER=0,TOTAL=0):
-    # preprocesar data
-    gray = gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
-
-    # face detection
-    rectangles = frontal_face_detector(gray, 0)
-    boxes_face = f_utils.convert_rectangles2array(rectangles,im)
-    if len(boxes_face)!=0:
-        # usar solo el rostro con la cara mas grande
-        areas = f_utils.get_areas(boxes_face)
-        index = np.argmax(areas)
-        rectangles = rectangles[index]
-        boxes_face = [list(boxes_face[index])]
-
-        # -------------------------------------- emotion_detection ---------------------------------------
-        '''
-        input:
-            - imagen RGB
-            - boxes_face: [[579, 170, 693, 284]]
-        output:
-            - status: "ok"
-            - emotion: ['happy'] or ['neutral'] ...
-            - box: [[579, 170, 693, 284]]
-        '''
-        _,emotion = emotion_detector.get_emotion(im,boxes_face)
-        # -------------------------------------- blink_detection ---------------------------------------
-        '''
-        input:
-            - imagen gray
-            - rectangles
-        output:
-            - status: "ok"
-            - COUNTER: # frames consecutivos por debajo del umbral
-            - TOTAL: # de parpadeos
-        '''
-        COUNTER,TOTAL = blink_detector.eye_blink(gray,rectangles,COUNTER,TOTAL)
-    else:
-        boxes_face = []
-        emotion = []
-        TOTAL = 0
-        COUNTER = 0
-
-    # -------------------------------------- profile_detection ---------------------------------------
-    '''
-    input:
-        - imagen gray
-    output:
-        - status: "ok"
-        - profile: ["right"] or ["left"]
-        - box: [[579, 170, 693, 284]]
-    '''
-    box_orientation, orientation = profile_detector.face_orientation(gray)
-
-    # -------------------------------------- output ---------------------------------------
-    output = {
-        'box_face_frontal': boxes_face,
-        'box_orientation': box_orientation,
-        'emotion': emotion,
-        'orientation': orientation,
+def detect_liveness(frame, COUNTER, TOTAL):
+    # 转换为灰度图
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # 检测人脸
+    rects = detector(gray, 0)
+    
+    # 初始化返回值
+    result = {
+        'count_blinks_consecutives': COUNTER,
         'total_blinks': TOTAL,
-        'count_blinks_consecutives': COUNTER
+        'ear': 0.0,
+        'leftEye': [],
+        'rightEye': [],
+        'faces': len(rects)
     }
-    return output
+    
+    # 如果没有检测到人脸，直接返回
+    if len(rects) == 0:
+        return result
+    
+    # 对每个检测到的人脸进行处理（这里只处理第一个）
+    rect = rects[0]
+    
+    # 获取面部关键点
+    shape = predictor(gray, rect)
+    shape = np.array([[p.x, p.y] for p in shape.parts()])
+    
+    # 提取左右眼的关键点
+    leftEye = shape[lStart:lEnd]
+    rightEye = shape[rStart:rEnd]
+    
+    # 计算左右眼的纵横比
+    leftEAR = eye_aspect_ratio(leftEye)
+    rightEAR = eye_aspect_ratio(rightEye)
+    
+    # 计算平均纵横比
+    ear = (leftEAR + rightEAR) / 2.0
+    
+    # 更新结果
+    result['ear'] = ear
+    result['leftEye'] = leftEye.tolist()
+    result['rightEye'] = rightEye.tolist()
+    
+    # 检测眨眼
+    EYE_AR_THRESH = 0.23
+    EYE_AR_CONSEC_FRAMES = 3
+    
+    if ear < EYE_AR_THRESH:
+        result['count_blinks_consecutives'] += 1
+    else:
+        if result['count_blinks_consecutives'] >= EYE_AR_CONSEC_FRAMES:
+            result['total_blinks'] += 1
+        result['count_blinks_consecutives'] = 0
+    
+    # 在图像上绘制眼睛和纵横比
+    for (x, y) in leftEye:
+        cv2.circle(frame, (x, y), 2, (0, 255, 0), -1)
+    for (x, y) in rightEye:
+        cv2.circle(frame, (x, y), 2, (0, 255, 0), -1)
+    
+    cv2.putText(frame, f"EAR: {ear:.2f}", (300, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    cv2.putText(frame, f"Blinks: {result['total_blinks']}", (300, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    
+    return result
 

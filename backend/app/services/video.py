@@ -9,6 +9,7 @@ from app.services import detection as detection_service
 from app.services.alerts import update_detection_time, reset_alerts, add_alert
 from app.services import system_state
 from app.services.violenceDetect import load_model_safely, process_frame as violence_process_frame, CUSTOM_OBJECTS
+from app.services.face_anti_spoofing_service import FaceAntiSpoofingService
 import tensorflow as tf
 from collections import deque
 
@@ -40,6 +41,9 @@ def video_feed():
         'skip_frames': 0,                # 跳帧计数器
         'last_processed_frame': None,    # 上一次处理的帧
     } # Create a fresh cache for this session
+
+    # 创建简化版人脸防伪服务实例
+    face_anti_spoofing_service = None
 
     # 暴力检测模型和特征提取器（仅在首次用到时加载）
     violence_model = None
@@ -91,7 +95,7 @@ def video_feed():
         nonlocal object_model_stream, face_model_stream, pose_model_stream
         nonlocal frame_count, prev_frame_time, new_frame_time, violence_model, vgg_model
         nonlocal image_model_transfer, violence_buffer, violence_status, violence_prob
-        nonlocal violence_last_infer_frame, skip_frame_count
+        nonlocal violence_last_infer_frame, skip_frame_count, face_anti_spoofing_service
         
         try:
             while CAMERA_ACTIVE:
@@ -131,7 +135,35 @@ def video_feed():
                     skip_frame_count = 0  # 重置计数器
 
                     # 根据当前模式决定处理方式 (All modes now use session-local models)
-                    if system_state.DETECTION_MODE == 'violence_detection':
+                    if system_state.DETECTION_MODE == 'face_anti_spoofing':
+                        # Lazy loading of face anti-spoofing service
+                        if face_anti_spoofing_service is None:
+                            try:
+                                face_anti_spoofing_service = FaceAntiSpoofingService()
+                                face_anti_spoofing_service.start_verification()
+                                print("Successfully created face anti-spoofing service instance")
+                            except Exception as e:
+                                print(f"Failed to create face anti-spoofing service: {e}")
+                                # If creation fails, add simple text display
+                                cv2.putText(processed_frame, "Face Anti-Spoofing Mode - Initialization Failed", (10, 30), 
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        
+                        # If service instance exists, process the frame
+                        if face_anti_spoofing_service:
+                            try:
+                                processed_frame, status, current_question = face_anti_spoofing_service.process_frame(frame)
+                                
+                                # Add alerts based on status
+                                if status == "success":
+                                    add_alert("Face anti-spoofing verification passed!")
+                                elif status == "fail":
+                                    add_alert("Face anti-spoofing verification failed!")
+                            except Exception as e:
+                                print(f"Failed to process face anti-spoofing frame: {e}")
+                                # If processing fails, add simple text display
+                                cv2.putText(processed_frame, f"Processing failed: {str(e)[:30]}", (10, 60), 
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    elif system_state.DETECTION_MODE == 'violence_detection':
                         # 初始化模型和特征提取器
                         if violence_model is None:
                             import os
@@ -152,19 +184,19 @@ def video_feed():
                                 transfer_values = image_model_transfer.predict(np.array(violence_buffer), verbose=0)
                                 prediction = violence_model.predict(np.array([transfer_values]), verbose=0)
                                 violence_prob = float(prediction[0][0])
-                                # 状态判断
+                                # Status determination
                                 if violence_prob <= 0.5:
                                     violence_status = "safe"
                                 elif violence_prob <= 0.7:
                                     violence_status = "caution"
-                                    add_alert("caution: 检测到可能的暴力行为")
+                                    add_alert("Caution: Possible violent behavior detected")
                                 else:
                                     violence_status = "warning"
-                                    add_alert("warning: 检测到高概率暴力行为!")
+                                    add_alert("Warning: High probability of violent behavior!")
                             except Exception as e:
                                 violence_status = "error"
                                 violence_prob = 0.0
-                                print(f"暴力检测推理异常: {e}")
+                                print(f"Violence detection inference error: {e}")
                         # 叠加状态到画面
                         color = (0, 255, 0) if violence_status == "safe" else (0, 255, 255) if violence_status == "caution" else (0, 0, 255)
                         cv2.putText(processed_frame, f"state: {violence_status}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
@@ -217,15 +249,18 @@ def video_feed():
                       bytearray(encodedImage) + b'\r\n')
         
         except (GeneratorExit, ConnectionAbortedError):
-            print("客户端断开连接，正在清理视频流资源...")
+            print("Client disconnected, cleaning up video stream resources...")
         finally:
-            print("释放摄像头和模型资源...")
+            print("Releasing camera and model resources...")
             cap.release()
 
-            # 显式删除模型实例以释放内存
+            # Explicitly delete model instances to free memory
             del object_model_stream
             del face_model_stream
             del pose_model_stream
+            
+            if face_anti_spoofing_service:
+                del face_anti_spoofing_service
             
             if violence_model:
                 del violence_model
@@ -234,17 +269,17 @@ def video_feed():
             if image_model_transfer:
                 del image_model_transfer
             
-            # 对于TensorFlow模型，清理会话至关重要
+            # For TensorFlow models, clearing the session is crucial
             tf.keras.backend.clear_session()
             
-            print("所有模型和摄像头资源已成功释放。")
+            print("All model and camera resources have been successfully released.")
 
     return Response(generate(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 def stop_video_feed_service():
-    """停止摄像头视频流的服务函数"""
+    """Service function to stop camera video stream"""
     global CAMERA_ACTIVE
     CAMERA_ACTIVE = False
-    print("摄像头视频流已请求停止。")
+    print("Camera video stream has been requested to stop.")
     return True 

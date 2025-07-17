@@ -14,6 +14,7 @@ from app.services.smoking_detection_service import SmokingDetectionService
 import time
 from concurrent.futures import ThreadPoolExecutor
 from app.services import violenceDetect
+from .liveness_detection import LivenessDetector
 
 # --- 模型管理 (使用相对路径) ---
 # 路径是相对于 backend/app/services/ 目录的
