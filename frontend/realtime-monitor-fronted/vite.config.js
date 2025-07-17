@@ -1,28 +1,18 @@
+import { fileURLToPath, URL } from 'node:url'
+
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { resolve } from 'path'
+import vueDevTools from 'vite-plugin-vue-devtools'
 
+// https://vite.dev/config/
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    vueDevTools(),
+  ],
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src')
-    }
+      '@': fileURLToPath(new URL('./src', import.meta.url))
+    },
   },
-  server: {
-    proxy: {
-      // API 请求代理到本地后端
-      '/api': {
-        target: 'http://127.0.0.1:5000',
-        changeOrigin: true,
-        secure: false
-      },
-      // Socket.IO 代理（支持 WebSocket）
-      '/socket.io': {
-        target: 'http://127.0.0.1:5000',
-        changeOrigin: true,
-        ws: true // 启用 WebSocket 代理
-      }
-    }
-  }
-})
+}) 

@@ -1,18 +1,17 @@
 import uuid
 import mysql.connector
 from werkzeug.security import generate_password_hash
-from flask import current_app
+from app.config import Config
 
 class RegisterService:
     def __init__(self):
-        # 从当前应用配置中获取数据库配置
         self.config = {
-            'host': current_app.config.get('MYSQL_HOST'),
-            'port': current_app.config.get('MYSQL_PORT'),
-            'user': current_app.config.get('MYSQL_USER'),
-            'password': current_app.config.get('MYSQL_PASSWORD'),
-            'database': current_app.config.get('MYSQL_DB'),
-            'charset': current_app.config.get('MYSQL_CHARSET')
+            'host': Config.MYSQL_HOST,
+            'port': Config.MYSQL_PORT,
+            'user': Config.MYSQL_USER,
+            'password': Config.MYSQL_PASSWORD,
+            'database': Config.MYSQL_DB,
+            'charset': Config.MYSQL_CHARSET
         }
 
     def get_connection(self):
