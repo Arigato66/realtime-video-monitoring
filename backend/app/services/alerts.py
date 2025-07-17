@@ -50,39 +50,33 @@ def add_alert_memory(alert_message, event_type=None, details=None, snapshot_path
 
 def get_alerts():
     """获取当前内存中的所有警报信息"""
+    global _memory_alerts
+    print(f"get_alerts被调用，当前_memory_alerts长度: {len(_memory_alerts)}")
+    print(f"_memory_alerts内容: {_memory_alerts}")
     return _memory_alerts
 
 # --- 新的基于数据库的告警服务 ---
 
-def create_alert(event_type, details=None, video_path=None, frame_snapshot_path=None):
+def create_alert(event_type, details, video_path=None, frame_snapshot_path=None):
     """
-    在数据库中创建一个新的告警事件。
-
-    :param event_type: 告警类型 (e.g., '闯入危险区', '跌倒检测')
-    :param details: 告警详情
-    :param video_path: 关联的视频文件路径
-    :param frame_snapshot_path: 关键帧快照路径
-    :return: 创建的 Alert 对象
+    创建新的告警记录到数据库。
     """
-    # --- FIX: 手动创建应用上下文以在任何地方安全地访问数据库 ---
-    with create_app().app_context():
-        try:
-            new_alert = Alert(
-                event_type=event_type,
-                details=details,
-                video_path=video_path,
-                frame_snapshot_path=frame_snapshot_path,
-                timestamp=datetime.utcnow()
-            )
-            db.session.add(new_alert)
-            db.session.commit()
-            print(f"数据库告警已创建: {event_type} - {details}")
-            # 可以在这里通过socketio通知前端
-            return new_alert
-        except Exception as e:
-            db.session.rollback()
-            print(f"创建数据库告警失败: {e}")
-            return None
+    try:
+        new_alert = Alert(
+            event_type=event_type,
+            details=details,
+            video_path=video_path,
+            frame_snapshot_path=frame_snapshot_path,
+            status='unprocessed'
+        )
+        db.session.add(new_alert)
+        db.session.commit()
+        print(f"数据库告警已创建: {event_type} - {details}")
+        return new_alert
+    except Exception as e:
+        db.session.rollback()
+        print(f"创建告警失败: {e}")
+        return None
 
 def get_all_alerts(page=1, per_page=20, status=None):
     """
