@@ -134,7 +134,6 @@ def run_face_anti_spoofing():
         return
     
     # parameters 
-    COUNTER, TOTAL = 0, 0
     counter_ok_questions = 0
     counter_ok_consecutives = 0
     limit_consecutives = 3
