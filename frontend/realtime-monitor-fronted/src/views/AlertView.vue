@@ -1,220 +1,201 @@
 <template>
-  <div class="alert-info-page">
-    <h1>告警中心</h1>
-
-    <!-- 新增：告警统计信息 -->
-    <div class="alert-stats">
-      <div class="stat-card">
-        <div class="stat-value">{{ stats.unprocessed }}</div>
-        <div class="stat-label">未处理</div>
+  <div class="alert-view-page">
+    <!-- 引入顶部栏组件 -->
+    <TopBar />
+            
+    <!-- 页面标题区域 -->
+    <div class="page-title">
+      <div class="title-content">
+        <div class="title-icon">
+          <AlertTriangle class="w-8 h-8" />
+        </div>
+        <div class="title-text">
+          <h1>告警中心</h1>
+          <p>查看和管理所有监控告警</p>
+        </div>
       </div>
-      <div class="stat-card">
-        <div class="stat-value">{{ stats.viewed }}</div>
-        <div class="stat-label">已查看</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">{{ stats.resolved }}</div>
-        <div class="stat-label">已解决</div>
-      </div>
-      <div class="stat-card total">
-        <div class="stat-value">{{ stats.total }}</div>
-        <div class="stat-label">总计</div>
-      </div>
-      <div class="stat-actions">
+      <div class="title-actions">
         <button @click="goToSystemLogs" class="system-logs-button">
-          <i class="fa fa-list"></i> 查看系统日志
+          <List class="w-4 h-4" />
+          <span>查看系统日志</span>
         </button>
       </div>
     </div>
 
-    <div class="alert-section control-section">
+    <!-- 告警统计信息 -->
+    <div class="stats-container">
+      <div class="stat-card unprocessed">
+        <div class="stat-header">
+          <Clock class="w-6 h-6" />
+          <h3>未处理</h3>
+        </div>
+        <p class="stat-value">{{ stats.unprocessed }}</p>
+      </div>
+      <div class="stat-card viewed">
+        <div class="stat-header">
+          <Eye class="w-6 h-6" />
+          <h3>已查看</h3>
+        </div>
+        <p class="stat-value">{{ stats.viewed }}</p>
+      </div>
+      <div class="stat-card resolved">
+        <div class="stat-header">
+          <CheckCircle class="w-6 h-6" />
+          <h3>已解决</h3>
+        </div>
+        <p class="stat-value">{{ stats.resolved }}</p>
+      </div>
+      <div class="stat-card total">
+        <div class="stat-header">
+          <Shield class="w-6 h-6" />
+          <h3>告警总数</h3>
+        </div>
+        <p class="stat-value">{{ stats.total }}</p>
+      </div>
+    </div>
+
+    <!-- 筛选和操作 -->
+    <div class="controls-container">
       <div class="filters">
-        <label>
-          状态过滤:
-          <select v-model="filterStatus" @change="fetchAlerts(1)">
-            <option value="">所有状态</option>
-            <option value="unprocessed">未处理</option>
-            <option value="viewed">已查看</option>
-            <option value="resolved">已解决</option>
-          </select>
+        <label class="filter-label">
+          <Filter class="w-4 h-4" />
+          <span>状态过滤:</span>
         </label>
-        <button @click="fetchAlerts(currentPage)" class="refresh-button">
-          <i class="fa fa-refresh"></i> 刷新
-        </button>
+        <select v-model="filterStatus" @change="fetchAlerts(1)" class="filter-select">
+          <option value="">所有状态</option>
+          <option value="unprocessed">未处理</option>
+          <option value="viewed">已查看</option>
+          <option value="resolved">已解决</option>
+        </select>
       </div>
-      
-      <div class="alerts-table-container">
-        <table class="alerts-table">
-          <thead>
-            <tr>
-              <th>快照/回放</th>
-              <th>告警类型</th>
-              <th>告警详情</th>
-              <th>告警时间</th>
-              <th>状态</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="alert in alerts" :key="alert.id" class="alert-row" :class="`status-${alert.status}`">
-              <td class="alert-media">
-                <!-- 快照图片 -->
-                <div class="media-container">
-                  <img :src="getSnapshotUrl(alert.frame_snapshot_path)" 
-                       alt="告警快照" 
-                       class="alert-snapshot" 
-                       @click="showSnapshotModal(alert)"
-                       @error="onImageError"/>
-                  
-                  <!-- 视频回放按钮 -->
-                  <div class="media-controls">
-                    <button v-if="alert.video_path" @click="playVideo(alert)" class="play-button">
-                      <i class="fa fa-play"></i> 视频回放
-                    </button>
-                    <button @click="showSnapshotModal(alert)" class="view-button">
-                      <i class="fa fa-search-plus"></i> 查看大图
-                    </button>
-                  </div>
-                </div>
-              </td>
-              <td>
-                <span class="event-type">{{ alert.event_type }}</span>
-              </td>
-              <td>
-                <div class="alert-details">
-                  <p>{{ alert.details }}</p>
-                  <small v-if="alert.video_path" class="video-info">
-                    <i class="fa fa-video-camera"></i> 包含视频记录
-                  </small>
-                </div>
-              </td>
-              <td>
-                <div class="timestamp">
-                  {{ formatTimestamp(alert.timestamp) }}
-                </div>
-              </td>
-              <td>
-                <span class="status-badge" :class="`status-${alert.status}`">
-                  {{ getStatusText(alert.status) }}
-                </span>
-              </td>
-              <td>
-                <div class="action-buttons">
-                  <button @click="changeStatus(alert, 'viewed')" 
-                          :disabled="alert.status === 'viewed' || alert.status === 'resolved'" 
-                          class="handle-button viewed-btn">
-                    <i class="fa fa-eye"></i> 设为已读
-                  </button>
-                  <button @click="changeStatus(alert, 'resolved')" 
-                          :disabled="alert.status === 'resolved'" 
-                          class="handle-button resolved-btn">
-                    <i class="fa fa-check"></i> 解决
-                  </button>
-                </div>
-              </td>
-            </tr>
-            <tr v-if="!alerts.length" class="no-alert-row">
-              <td colspan="6">
-                <div class="no-data-placeholder">
-                  <i class="fa fa-exclamation-triangle"></i>
-                  <p>当前无告警信息</p>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      <button @click="fetchAlerts(currentPage)" class="refresh-button">
+        <RefreshCw class="w-4 h-4" />
+        <span>刷新</span>
+      </button>
+    </div>
+
+    <!-- 告警列表 -->
+    <div class="alerts-list-container">
+      <transition-group name="alert-list" tag="div" class="alerts-grid">
+        <div v-for="alert in alerts" :key="alert.id" class="alert-card" :class="`status-${alert.status}`">
+          <div class="card-header">
+            <span class="event-type">
+              <Tag class="w-3 h-3" />
+              {{ alert.event_type }}
+            </span>
+            <span class="status-badge" :class="`status-${alert.status}`">{{ getStatusText(alert.status) }}</span>
+          </div>
+          <div class="card-body">
+            <div class="media-preview" @click="showSnapshotModal(alert)">
+              <img :src="getSnapshotUrl(alert.frame_snapshot_path)" alt="快照" @error="onImageError" />
+              <div class="media-overlay">
+                <Search class="w-6 h-6" />
+              </div>
+            </div>
+            <div class="alert-details">
+              <p class="details-text">{{ alert.details }}</p>
+              <div class="timestamp">
+                <Calendar class="w-3 h-3" />
+                <span>{{ formatTimestamp(alert.timestamp) }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="card-footer">
+            <button @click="changeStatus(alert, 'viewed')" :disabled="alert.status === 'viewed' || alert.status === 'resolved'" class="action-btn viewed-btn">
+              <Eye class="w-4 h-4" />
+              <span>设为已读</span>
+            </button>
+            <button @click="changeStatus(alert, 'resolved')" :disabled="alert.status === 'resolved'" class="action-btn resolved-btn">
+              <Check class="w-4 h-4" />
+              <span>解决</span>
+            </button>
+          </div>
+        </div>
+      </transition-group>
+      <div v-if="!alerts.length" class="no-data-placeholder">
+        <ShieldOff class="w-16 h-16 text-gray-400" />
+        <h3>当前无告警信息</h3>
+        <p>所有系统均正常运行。</p>
       </div>
-      
-      <div class="pagination-controls" v-if="totalPages > 1">
+    </div>
+
+    <!-- 分页 -->
+    <div class="pagination-controls" v-if="totalPages > 1">
         <button @click="fetchAlerts(currentPage - 1)" :disabled="currentPage <= 1" class="page-button">
-          <i class="fa fa-chevron-left"></i> 上一页
+          <ChevronLeft class="w-4 h-4" />
+          <span>上一页</span>
         </button>
         <div class="page-numbers">
           <span>第 {{ currentPage }} / {{ totalPages }} 页 (共 {{ totalItems }} 条)</span>
         </div>
         <button @click="fetchAlerts(currentPage + 1)" :disabled="currentPage >= totalPages" class="page-button">
-          下一页 <i class="fa fa-chevron-right"></i>
+          <span>下一页</span>
+          <ChevronRight class="w-4 h-4" />
         </button>
-      </div>
     </div>
 
     <!-- 媒体查看模态框 -->
-    <div v-if="mediaModalVisible" class="media-modal" @click="hideMediaModal">
-      <div class="modal-content" @click.stop>
-        <div class="modal-header">
-          <h3>告警详情 - {{ selectedAlert?.event_type }}</h3>
-          <span class="close-button" @click="hideMediaModal">&times;</span>
-        </div>
-        
-        <div class="modal-body">
-          <div class="alert-info">
-            <p><strong>告警时间:</strong> {{ formatTimestamp(selectedAlert?.timestamp) }}</p>
-            <p><strong>告警详情:</strong> {{ selectedAlert?.details }}</p>
-            <p><strong>状态:</strong> {{ getStatusText(selectedAlert?.status) }}</p>
+    <transition name="modal-fade">
+      <div v-if="mediaModalVisible" class="media-modal-overlay" @click="hideMediaModal">
+        <div class="media-modal-content" @click.stop>
+          <div class="modal-header">
+            <h3>告警详情 - {{ selectedAlert?.event_type }}</h3>
+            <button class="close-button" @click="hideMediaModal">
+              <X class="w-5 h-5" />
+            </button>
           </div>
-          
-          <!-- 快照图片 -->
-          <div class="media-section">
-            <h4>告警快照</h4>
-            <img :src="getSnapshotUrl(selectedAlert?.frame_snapshot_path)" 
-                 alt="告警快照" 
-                 class="modal-image"
-                 @error="onImageError"/>
-          </div>
-          
-          <!-- 视频回放 -->
-          <div v-if="selectedAlert?.video_path" class="media-section">
-            <h4>视频回放</h4>
-            <video :src="getVideoUrl(selectedAlert?.video_path)" 
-                   controls 
-                   class="modal-video"
-                   preload="metadata">
-              您的浏览器不支持视频播放
-            </video>
-          </div>
-          
-          <!-- 新增：告警日志 -->
-          <div class="media-section">
-            <h4>告警日志</h4>
-            <div class="alert-logs">
-              <div class="log-entry">
-                <div class="log-time">{{ formatTimestamp(selectedAlert?.timestamp) }}</div>
-                <div class="log-content">
-                  <div class="log-title">告警触发</div>
-                  <div class="log-details">{{ selectedAlert?.event_type }}: {{ selectedAlert?.details }}</div>
+          <div class="modal-body">
+            <div class="media-section">
+              <h4>告警快照</h4>
+              <img :src="getSnapshotUrl(selectedAlert?.frame_snapshot_path)" alt="告警快照" class="modal-image" @error="onImageError"/>
+            </div>
+            <div v-if="selectedAlert?.video_path" class="media-section">
+              <h4>视频回放</h4>
+              <video :src="getVideoUrl(selectedAlert?.video_path)" controls class="modal-video" preload="metadata">
+                您的浏览器不支持视频播放
+              </video>
+            </div>
+            <div class="info-section">
+              <h4>详细信息</h4>
+              <div class="info-grid">
+                <div class="info-item">
+                  <span class="info-label">告警时间</span>
+                  <span class="info-value">{{ formatTimestamp(selectedAlert?.timestamp) }}</span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">告警状态</span>
+                  <span class="info-value status-badge" :class="`status-${selectedAlert?.status}`">{{ getStatusText(selectedAlert?.status) }}</span>
                 </div>
               </div>
-              <div v-if="selectedAlert?.status !== 'unprocessed'" class="log-entry">
-                <div class="log-time">{{ formatTimestamp(selectedAlert?.timestamp) }}</div>
-                <div class="log-content">
-                  <div class="log-title">状态更新</div>
-                  <div class="log-details">告警状态已更新为 "{{ getStatusText(selectedAlert?.status) }}"</div>
-                </div>
+              <div class="info-item full-width">
+                <span class="info-label">告警描述</span>
+                <p class="info-value">{{ selectedAlert?.details }}</p>
               </div>
             </div>
           </div>
-        </div>
-        
-        <div class="modal-footer">
-          <button @click="changeStatus(selectedAlert, 'viewed')" 
-                  :disabled="selectedAlert?.status === 'viewed' || selectedAlert?.status === 'resolved'"
-                  class="modal-button viewed-btn">
-            <i class="fa fa-eye"></i> 标记已读
-          </button>
-          <button @click="changeStatus(selectedAlert, 'resolved')" 
-                  :disabled="selectedAlert?.status === 'resolved'"
-                  class="modal-button resolved-btn">
-            <i class="fa fa-check"></i> 标记解决
-          </button>
+          <div class="modal-footer">
+            <button @click="changeStatus(selectedAlert, 'viewed')" :disabled="selectedAlert?.status === 'viewed' || selectedAlert?.status === 'resolved'" class="modal-button viewed-btn">
+              标记已读
+            </button>
+            <button @click="changeStatus(selectedAlert, 'resolved')" :disabled="selectedAlert?.status === 'resolved'" class="modal-button resolved-btn">
+              标记解决
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </transition>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
+import TopBar from '../components/TopBar.vue';
+
+import {
+  AlertTriangle, List, Clock, Eye, CheckCircle, Shield, Filter, RefreshCw,
+  Tag, Search, Calendar, ShieldOff, ChevronLeft, ChevronRight, X, Check
+} from 'lucide-vue-next';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000/api';
 const SERVER_ROOT_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
@@ -441,634 +422,428 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.alert-info-page {
-  padding: 20px;
-  background-color: #f5f5f5;
+/* 基本页面样式 */
+.alert-view-page {
   min-height: 100vh;
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  padding-bottom: 40px;
 }
 
-.alert-info-page h1 {
-  color: #333;
-  margin-bottom: 20px;
+/* 页面标题 */
+.page-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 24px 32px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  margin-bottom: 24px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+.title-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.title-icon {
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+}
+
+.title-text h1 {
   font-size: 28px;
-  font-weight: bold;
+  font-weight: 700;
 }
 
-.alert-section {
-  background: white;
+.title-text p {
+  opacity: 0.8;
+  font-size: 14px;
+}
+
+.system-logs-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
   border-radius: 8px;
-  padding: 20px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+  border: none;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.system-logs-button:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* 统计卡片 */
+.stats-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 24px;
+  padding: 0 32px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: white;
+  padding: 24px;
+  border-radius: 12px;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.08);
+  border-left: 5px solid;
+  transition: all 0.3s ease;
+}
+
+.stat-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.12);
+}
+
+.stat-card.unprocessed { border-color: #f59e0b; }
+.stat-card.viewed { border-color: #3b82f6; }
+.stat-card.resolved { border-color: #10b981; }
+.stat-card.total { border-color: #6366f1; }
+
+.stat-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #4b5563;
+  margin-bottom: 8px;
+}
+
+.stat-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.stat-value {
+  font-size: 36px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+/* 控制和筛选 */
+.controls-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 32px;
+  margin: 0 32px 24px;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.05);
 }
 
 .filters {
   display: flex;
   align-items: center;
-  gap: 15px;
-  margin-bottom: 20px;
-  padding: 15px;
-  background: #f8f9fa;
-  border-radius: 6px;
+  gap: 12px;
 }
 
-.filters label {
-  font-weight: 500;
-  color: #555;
-}
-
-.filters select {
-  padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
+.filter-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 14px;
-  margin-left: 8px;
+  font-weight: 500;
+  color: #374151;
+}
+
+.filter-select {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  background: #f9fafb;
+  font-size: 14px;
+  outline: none;
 }
 
 .refresh-button {
-  padding: 8px 16px;
-  background: #007bff;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
   display: flex;
   align-items: center;
-  gap: 5px;
-  transition: background-color 0.3s;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  color: white;
+  border: none;
+  cursor: pointer;
+  transition: all 0.3s ease;
 }
 
-.refresh-button:hover {
-  background: #0056b3;
+/* 告警卡片列表 */
+.alerts-list-container {
+  padding: 0 32px;
 }
 
-.alerts-table-container {
-  overflow-x: auto;
-  border-radius: 6px;
-  border: 1px solid #e0e0e0;
+.alerts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
 }
 
-.alerts-table {
-  width: 100%;
-  border-collapse: collapse;
+.alert-card {
   background: white;
+  border-radius: 12px;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  transition: all 0.3s ease;
+  border-top: 5px solid;
 }
 
-.alerts-table th {
-  background: #f8f9fa;
-  padding: 15px 12px;
-  text-align: left;
+.alert-card.status-unprocessed { border-color: #f59e0b; }
+.alert-card.status-viewed { border-color: #3b82f6; }
+.alert-card.status-resolved { border-color: #10b981; }
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #f8fafc;
+}
+
+.event-type {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-weight: 600;
-  color: #333;
-  border-bottom: 2px solid #e0e0e0;
   font-size: 14px;
+  color: #374151;
 }
 
-.alerts-table td {
-  padding: 15px 12px;
-  border-bottom: 1px solid #f0f0f0;
-  vertical-align: top;
+.status-badge {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: white;
 }
 
-.alert-row {
-  transition: background-color 0.2s;
+.status-badge.status-unprocessed { background: #f59e0b; }
+.status-badge.status-viewed { background: #3b82f6; }
+.status-badge.status-resolved { background: #10b981; }
+
+.card-body {
+  padding: 16px;
+  display: flex;
+  gap: 16px;
 }
 
-.alert-row:hover {
-  background-color: #f8f9fa;
-}
-
-.alert-row.status-unprocessed {
-  border-left: 4px solid #dc3545;
-}
-
-.alert-row.status-viewed {
-  border-left: 4px solid #ffc107;
-}
-
-.alert-row.status-resolved {
-  border-left: 4px solid #28a745;
-}
-
-.alert-media {
-  width: 200px;
-  min-width: 200px;
-}
-
-.media-container {
+.media-preview {
+  width: 100px;
+  height: 100px;
+  border-radius: 8px;
+  overflow: hidden;
   position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.media-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.media-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.media-preview:hover .media-overlay {
+  opacity: 1;
+}
+
+.alert-details {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.alert-snapshot {
-  width: 180px;
-  height: 120px;
-  object-fit: cover;
-  border-radius: 6px;
-  cursor: pointer;
-  border: 2px solid #e0e0e0;
-  transition: border-color 0.3s, transform 0.2s;
-}
-
-.alert-snapshot:hover {
-  border-color: #007bff;
-  transform: scale(1.02);
-}
-
-.media-controls {
-  display: flex;
-  gap: 5px;
-  flex-wrap: wrap;
-}
-
-.play-button, .view-button {
-  padding: 4px 8px;
-  font-size: 12px;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  transition: background-color 0.3s;
-}
-
-.play-button {
-  background: #28a745;
-  color: white;
-}
-
-.play-button:hover {
-  background: #218838;
-}
-
-.view-button {
-  background: #6c757d;
-  color: white;
-}
-
-.view-button:hover {
-  background: #5a6268;
-}
-
-.event-type {
-  font-weight: 600;
-  color: #007bff;
-  background: #e7f3ff;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 13px;
-}
-
-.alert-details p {
-  margin: 0 0 5px 0;
-  color: #333;
-  line-height: 1.4;
-}
-
-.video-info {
-  color: #28a745;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  gap: 3px;
+.details-text {
+  font-size: 14px;
+  color: #4b5563;
+  line-height: 1.5;
 }
 
 .timestamp {
-  font-size: 13px;
-  color: #666;
-  white-space: nowrap;
-}
-
-.status-badge {
-  padding: 4px 12px;
-  border-radius: 20px;
-  font-size: 12px;
-  font-weight: 500;
-  text-align: center;
-  display: inline-block;
-  min-width: 70px;
-}
-
-.status-badge.status-unprocessed {
-  background: #f8d7da;
-  color: #721c24;
-}
-
-.status-badge.status-viewed {
-  background: #fff3cd;
-  color: #856404;
-}
-
-.status-badge.status-resolved {
-  background: #d4edda;
-  color: #155724;
-}
-
-.action-buttons {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.handle-button {
-  padding: 6px 12px;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
   display: flex;
   align-items: center;
-  gap: 4px;
-  transition: all 0.3s;
-  min-width: 80px;
-  justify-content: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #6b7280;
 }
 
-.handle-button:disabled {
+.card-footer {
+  padding: 12px 16px;
+  background: #f8fafc;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.action-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid #d1d5db;
+  background: white;
+  transition: all 0.3s ease;
+}
+
+.action-btn.viewed-btn:hover:not(:disabled) {
+  background: #dbeafe;
+  border-color: #3b82f6;
+  color: #3b82f6;
+}
+
+.action-btn.resolved-btn:hover:not(:disabled) {
+  background: #d1fae5;
+  border-color: #10b981;
+  color: #10b981;
+}
+
+.action-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.viewed-btn {
-  background: #ffc107;
-  color: #212529;
-}
-
-.viewed-btn:hover:not(:disabled) {
-  background: #e0a800;
-}
-
-.resolved-btn {
-  background: #28a745;
-  color: white;
-}
-
-.resolved-btn:hover:not(:disabled) {
-  background: #218838;
-}
-
-.no-data-placeholder {
-  text-align: center;
-  padding: 40px;
-  color: #666;
-}
-
-.no-data-placeholder i {
-  font-size: 48px;
-  color: #ccc;
-  margin-bottom: 15px;
-  display: block;
-}
-
+/* 分页 */
 .pagination-controls {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
-  margin-top: 20px;
-  padding: 15px 0;
+  margin-top: 32px;
 }
 
 .page-button {
-  padding: 8px 16px;
-  background: #007bff;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 5px;
-  transition: background-color 0.3s;
-}
-
-.page-button:hover:not(:disabled) {
-  background: #0056b3;
-}
-
-.page-button:disabled {
-  background: #6c757d;
-  cursor: not-allowed;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: white;
+  border: 1px solid #d1d5db;
+  cursor: pointer;
 }
 
 .page-numbers {
-  font-weight: 500;
-  color: #333;
+  margin: 0 16px;
+  font-size: 14px;
+  color: #4b5563;
 }
 
-/* 媒体模态框样式 */
-.media-modal {
+/* 无数据占位符 */
+.no-data-placeholder {
+  text-align: center;
+  padding: 60px 0;
+  color: #9ca3af;
+  grid-column: 1 / -1;
+}
+
+/* 模态框样式 */
+.media-modal-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.8);
+  inset: 0;
+  background: rgba(0,0,0,0.7);
   display: flex;
   justify-content: center;
   align-items: center;
   z-index: 1000;
 }
 
-.modal-content {
+.media-modal-content {
   background: white;
-  border-radius: 12px;
-  max-width: 90vw;
+  border-radius: 16px;
+  width: 90%;
+  max-width: 800px;
   max-height: 90vh;
-  overflow-y: auto;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
 }
 
 .modal-header {
+  padding: 16px 24px;
+  border-bottom: 1px solid #e5e7eb;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px 25px;
-  border-bottom: 1px solid #e0e0e0;
-  background: #f8f9fa;
-  border-radius: 12px 12px 0 0;
-}
-
-.modal-header h3 {
-  margin: 0;
-  color: #333;
-  font-size: 20px;
-}
-
-.close-button {
-  font-size: 28px;
-  font-weight: bold;
-  color: #666;
-  cursor: pointer;
-  line-height: 1;
-  transition: color 0.3s;
-}
-
-.close-button:hover {
-  color: #333;
 }
 
 .modal-body {
-  padding: 25px;
-}
-
-.alert-info {
-  background: #f8f9fa;
-  padding: 15px;
-  border-radius: 6px;
-  margin-bottom: 20px;
-}
-
-.alert-info p {
-  margin: 5px 0;
-  color: #333;
-}
-
-.alert-info strong {
-  color: #007bff;
+  padding: 24px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
 }
 
 .media-section {
-  margin-bottom: 25px;
+  grid-column: 1 / -1;
 }
 
-.media-section h4 {
-  margin: 0 0 15px 0;
-  color: #333;
-  font-size: 16px;
-  border-bottom: 2px solid #007bff;
-  padding-bottom: 5px;
+.info-section {
+  grid-column: 1 / -1;
 }
 
-.modal-image {
-  max-width: 100%;
-  height: auto;
-  border-radius: 8px;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-}
-
-.modal-video {
+.modal-image, .modal-video {
   width: 100%;
-  max-width: 800px;
-  height: auto;
   border-radius: 8px;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  margin-top: 8px;
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.info-item {
+  background: #f8fafc;
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.info-label {
+  display: block;
+  font-size: 12px;
+  color: #6b7280;
+  margin-bottom: 4px;
 }
 
 .modal-footer {
+  padding: 16px 24px;
+  border-top: 1px solid #e5e7eb;
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
-  padding: 20px 25px;
-  border-top: 1px solid #e0e0e0;
-  background: #f8f9fa;
-  border-radius: 0 0 12px 12px;
+  gap: 12px;
 }
 
 .modal-button {
   padding: 10px 20px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  transition: all 0.3s;
-  font-weight: 500;
-}
-
-.modal-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.modal-button.viewed-btn {
-  background: #ffc107;
-  color: #212529;
-}
-
-.modal-button.viewed-btn:hover:not(:disabled) {
-  background: #e0a800;
-}
-
-.modal-button.resolved-btn {
-  background: #28a745;
-  color: white;
-}
-
-.modal-button.resolved-btn:hover:not(:disabled) {
-  background: #218838;
-}
-
-/* 新增告警日志样式 */
-.alert-logs {
-  background: #f8f9fa;
-  border-radius: 6px;
-  padding: 10px;
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.log-entry {
-  display: flex;
-  padding: 8px 0;
-  border-bottom: 1px solid #e0e0e0;
-}
-
-.log-entry:last-child {
-  border-bottom: none;
-}
-
-.log-time {
-  flex: 0 0 160px;
-  color: #666;
-  font-size: 12px;
-  padding-right: 15px;
-}
-
-.log-content {
-  flex: 1;
-}
-
-.log-title {
-  font-weight: 600;
-  color: #333;
-  margin-bottom: 3px;
-}
-
-.log-details {
-  font-size: 13px;
-  color: #555;
-}
-
-/* 新增：告警统计样式 */
-.alert-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 15px;
-  margin-bottom: 20px;
-}
-
-.stat-card {
-  flex: 1;
-  min-width: 120px;
-  background: white;
   border-radius: 8px;
-  padding: 15px;
-  text-align: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  transition: transform 0.3s, box-shadow 0.3s;
-}
-
-.stat-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-.stat-card.total {
-  background: #007bff;
-  color: white;
-}
-
-.stat-value {
-  font-size: 28px;
-  font-weight: bold;
-  margin-bottom: 5px;
-}
-
-.stat-label {
-  font-size: 14px;
-  color: #666;
-}
-
-.stat-card.total .stat-label {
-  color: rgba(255, 255, 255, 0.8);
-}
-
-.stat-actions {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.system-logs-button {
-  padding: 10px 15px;
-  background: #6c757d;
-  color: white;
-  border: none;
-  border-radius: 6px;
   cursor: pointer;
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 40px;
-  transition: background-color 0.3s;
+  border: none;
+  color: white;
 }
 
-.system-logs-button:hover {
-  background: #5a6268;
-}
-
-/* 响应式设计 */
-@media (max-width: 768px) {
-  .alert-info-page {
-    padding: 10px;
-  }
-  
-  .filters {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 10px;
-  }
-  
-  .alerts-table th,
-  .alerts-table td {
-    padding: 10px 8px;
-    font-size: 13px;
-  }
-  
-  .alert-media {
-    width: 150px;
-    min-width: 150px;
-  }
-  
-  .alert-snapshot {
-    width: 130px;
-    height: 90px;
-  }
-  
-  .action-buttons {
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
-  
-  .handle-button {
-    font-size: 11px;
-    padding: 4px 8px;
-    min-width: 60px;
-  }
-  
-  .modal-content {
-    max-width: 95vw;
-    margin: 10px;
-  }
-  
-  .modal-header,
-  .modal-body,
-  .modal-footer {
-    padding: 15px;
-  }
-
-  .alert-stats {
-    flex-direction: column;
-  }
-  
-  .stat-card {
-    min-width: 100%;
-  }
-}
+.modal-button.viewed-btn { background: #3b82f6; }
+.modal-button.resolved-btn { background: #10b981; }
 </style>
