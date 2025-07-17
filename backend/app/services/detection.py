@@ -12,6 +12,7 @@ from app.services.alerts import (
     update_loitering_time, reset_loitering_time, get_loitering_time,
     update_detection_time, get_alerts, reset_alerts
 )
+from app.services.logger import log_info, log_warning, log_error  # 导入日志服务
 from app.utils.geometry import point_in_polygon, distance_to_polygon
 from app.services.dlib_service import dlib_face_service
 from app.services import system_state
@@ -101,9 +102,13 @@ def process_image(filepath, uploads_dir):
     # 重置警报，以防上次调用的状态残留
     reset_alerts()
     
+    # 记录系统日志
+    log_info('detection', f'开始处理图片: {filepath}')
+    
     # 读取图片
     img = cv2.imread(filepath)
     if img is None:
+        log_error('detection', f'无法加载图片: {filepath}')
         return {"status": "error", "message": "Failed to load image"}, 500
     
     res_plotted = img.copy() # Start with a copy of the original image
@@ -156,16 +161,38 @@ def process_image(filepath, uploads_dir):
     output_url = f"/api/files/{output_filename}"
     print(f"图像处理完成，输出URL: {output_url}")
     
-    # --- FIX: 返回真实的数据库告警, 而不是旧的内存告警 ---
-    # get_alerts() 返回的是一个临时的内存列表，而 create_alert 已将告警存入数据库
-    # 此处我们返回一个确认信息，前端应通过访问告警中心API来获取最新列表
-    final_alerts = get_alerts() # 获取内存中的告警，用于即时（但不可靠）的反馈
+    # --- 修改: 确保告警同时保存到数据库中 ---
+    memory_alerts = get_alerts()  # 获取内存中的告警
+    db_alerts_data = []  # 用于存储数据库告警的字典数据
+    
+    # 将内存告警转换为数据库告警
+    for alert in memory_alerts:
+        # 创建数据库告警记录 - 使用try/except包装以避免应用上下文错误
+        try:
+            from app import create_app
+            app = create_app()
+            with app.app_context():
+                db_alert = create_alert(
+                    event_type=alert['event_type'],
+                    details=alert['details'],
+                    video_path=None,  # 图片处理没有视频
+                    frame_snapshot_path=alert['snapshot_path']
+                )
+                if db_alert:
+                    # 直接获取字典数据，避免会话分离问题
+                    db_alerts_data.append(db_alert.to_dict())
+        except Exception as e:
+            print(f"创建数据库告警失败: {e}")
+    
+    # 记录系统日志
+    log_info('detection', f'图片处理完成: {output_path}, 生成告警: {len(db_alerts_data)}')
     
     return {
         "status": "success",
         "media_type": "image",
         "file_url": output_url,
-        "alerts": final_alerts, # 返回处理期间生成的内存告警
+        "alerts": memory_alerts,  # 返回处理期间生成的内存告警
+        "db_alerts": db_alerts_data,  # 返回数据库告警的字典数据
         "message": "Processing complete. Check alert center for persistent alerts."
     }
 
@@ -182,6 +209,9 @@ def process_video(filepath, uploads_dir):
     """
     # 重置警报
     reset_alerts()
+    
+    # 记录系统日志
+    log_info('detection', f'开始处理视频: {filepath}')
     
     # 创建输出视频路径
     output_filename = 'processed_' + os.path.basename(filepath)
@@ -324,14 +354,38 @@ def process_video(filepath, uploads_dir):
     output_url = f"/api/files/{output_filename}"
     print(f"视频处理完成，输出URL: {output_url}")
     
-    # --- FIX: 同上, 视频处理也应明确返回处理期间的告警 ---
-    final_alerts = get_alerts()
+    # --- 修改: 确保告警同时保存到数据库中，并关联视频路径 ---
+    memory_alerts = get_alerts()  # 获取内存中的告警
+    db_alerts_data = []  # 用于存储数据库告警的字典数据
+    
+    # 将内存告警转换为数据库告警
+    for alert in memory_alerts:
+        # 创建数据库告警记录，并关联视频路径 - 使用try/except包装以避免应用上下文错误
+        try:
+            from app import create_app
+            app = create_app()
+            with app.app_context():
+                db_alert = create_alert(
+                    event_type=alert['event_type'],
+                    details=alert['details'],
+                    video_path=output_url,  # 关联处理后的视频路径
+                    frame_snapshot_path=alert['snapshot_path']
+                )
+                if db_alert:
+                    # 直接获取字典数据，避免会话分离问题
+                    db_alerts_data.append(db_alert.to_dict())
+        except Exception as e:
+            print(f"创建数据库告警失败: {e}")
+    
+    # 记录系统日志
+    log_info('detection', f'视频处理完成: {output_path}, 生成告警: {len(db_alerts_data)}')
     
     return {
         "status": "success",
         "media_type": "video",
         "file_url": output_url,
-        "alerts": final_alerts,
+        "alerts": memory_alerts,  # 返回处理期间生成的内存告警
+        "db_alerts": db_alerts_data,  # 返回数据库告警的字典数据
         "message": "Processing complete. Check alert center for persistent alerts."
     }
 
@@ -370,10 +424,25 @@ def process_smoking_detection_hybrid(frame, person_results, face_results, smokin
                 smoking_results = smoking_model.predict(roi_crop, imgsz=640, verbose=False)
                 if len(smoking_results[0].boxes) > 0:
                     snapshot_path = save_snapshot(frame) # 保存快照
+                    
+                    # 同时添加内存告警和数据库告警
                     add_alert("High-Confidence Smoking Detection in ROI", 
                              event_type="smoking_detection", 
                              details="高置信度吸烟检测行为", 
                              snapshot_path=snapshot_path)
+                    
+                    # 创建数据库告警 - 使用try/except包装以避免应用上下文错误
+                    try:
+                        from app import create_app
+                        app = create_app()
+                        with app.app_context():
+                            create_alert(
+                                event_type="smoking_detection",
+                                details="高置信度吸烟检测行为",
+                                frame_snapshot_path=snapshot_path
+                            )
+                    except Exception as e:
+                        print(f"创建数据库告警失败: {e}")
                     for s_box in smoking_results[0].boxes:
                         s_xyxy = s_box.xyxy.cpu().numpy().astype(int)[0]
                         abs_x1, abs_y1 = s_xyxy[0] + roi_x1, s_xyxy[1] + roi_y1
@@ -397,10 +466,25 @@ def process_smoking_detection_hybrid(frame, person_results, face_results, smokin
         smoking_results = smoking_model.predict(upper_body_crop, imgsz=1024, verbose=False)
         if len(smoking_results[0].boxes) > 0:
             snapshot_path = save_snapshot(frame) # 保存快照
+            
+            # 同时添加内存告警和数据库告警
             add_alert("Low-Confidence/Distant Smoking Detection in Upper Body",
                      event_type="smoking_detection",
                      details="低置信度/远距离吸烟检测行为",
                      snapshot_path=snapshot_path)
+            
+            # 创建数据库告警 - 使用try/except包装以避免应用上下文错误
+            try:
+                from app import create_app
+                app = create_app()
+                with app.app_context():
+                    create_alert(
+                        event_type="smoking_detection",
+                        details="低置信度/远距离吸烟检测行为",
+                        frame_snapshot_path=snapshot_path
+                    )
+            except Exception as e:
+                print(f"创建数据库告警失败: {e}")
             for s_box in smoking_results[0].boxes:
                 s_xyxy = s_box.xyxy.cpu().numpy().astype(int)[0]
                 abs_x1, abs_y1 = s_xyxy[0] + px1, s_xyxy[1] + py1
@@ -469,10 +553,25 @@ def process_object_detection_results(results, frame, time_diff, frame_count):
                     label_color = (0, 0, 255)  # BGR格式：红色
                     alert_status = f"ID:{id} ({display_name}) staying in danger zone for {loitering_time:.1f}s"
                     snapshot_path = save_snapshot(frame) # 保存快照
+                    
+                    # 同时添加内存告警和数据库告警
                     add_alert(alert_status,
                              event_type="danger_zone_intrusion",
                              details=f"人员 {display_name} 在危险区域停留 {loitering_time:.1f} 秒",
                              snapshot_path=snapshot_path)
+                    
+                    # 创建数据库告警 - 使用try/except包装以避免应用上下文错误
+                    try:
+                        from app import create_app
+                        app = create_app()
+                        with app.app_context():
+                            create_alert(
+                                event_type="danger_zone_intrusion",
+                                details=f"人员 {display_name} 在危险区域停留 {loitering_time:.1f} 秒",
+                                frame_snapshot_path=snapshot_path
+                            )
+                    except Exception as e:
+                        print(f"创建数据库告警失败: {e}")
                 else:
                     # 根据停留时间从橙色到红色渐变
                     ratio = min(1.0, loitering_time / LOITERING_THRESHOLD)
@@ -491,10 +590,25 @@ def process_object_detection_results(results, frame, time_diff, frame_count):
                     
                     alert_status = f"ID:{id} ({display_name}) too close to danger zone ({distance:.1f}px)"
                     snapshot_path = save_snapshot(frame) # 保存快照
+                    
+                    # 同时添加内存告警和数据库告警
                     add_alert(alert_status,
                              event_type="proximity_warning",
                              details=f"人员 {display_name} 过于接近危险区域，距离 {distance:.1f} 像素",
                              snapshot_path=snapshot_path)
+                    
+                    # 创建数据库告警 - 使用try/except包装以避免应用上下文错误
+                    try:
+                        from app import create_app
+                        app = create_app()
+                        with app.app_context():
+                            create_alert(
+                                event_type="proximity_warning",
+                                details=f"人员 {display_name} 过于接近危险区域，距离 {distance:.1f} 像素",
+                                frame_snapshot_path=snapshot_path
+                            )
+                    except Exception as e:
+                        print(f"创建数据库告警失败: {e}")
             
             # 在每个目标上方显示ID和类别
             label = f"ID:{id} {display_name}"
@@ -608,10 +722,25 @@ def process_pose_estimation_results(results, frame, time_diff, frame_count):
                                 if angle < 45: 
                                     alert_message = f"警告: 人员 {person_id} 可能已跌倒!"
                                     snapshot_path = save_snapshot(frame) # 保存快照
+                                    
+                                    # 同时添加内存告警和数据库告警
                                     add_alert(f"Fall Detected: Person ID {person_id} may have fallen.",
                                              event_type="fall_detection",
                                              details=f"检测到人员 {person_id} 可能跌倒，身体角度 {angle:.1f} 度",
                                              snapshot_path=snapshot_path)
+                                    
+                                    # 创建数据库告警 - 使用try/except包装以避免应用上下文错误
+                                    try:
+                                        from app import create_app
+                                        app = create_app()
+                                        with app.app_context():
+                                            create_alert(
+                                                event_type="fall_detection",
+                                                details=f"检测到人员 {person_id} 可能跌倒，身体角度 {angle:.1f} 度",
+                                                frame_snapshot_path=snapshot_path
+                                            )
+                                    except Exception as e:
+                                        print(f"创建数据库告警失败: {e}")
                                     # 在人的边界框上方用红色字体标注
                                     cv2.putText(frame, f"FALL DETECTED: ID {person_id}", 
                                                 (int(box[0]), int(box[1] - 10)),
@@ -789,14 +918,44 @@ def process_violence_detection(filepath, uploads_dir):
     alerts = []
     if violence_prob > 0.7:
         alerts.append("warning: 检测到高概率暴力行为!")
+        
+        # 同时添加内存告警和数据库告警
         add_alert(f"High probability ({violence_prob:.2f}) of violence detected.",
                  event_type="violence_detection",
                  details=f"检测到高概率暴力行为，置信度 {violence_prob:.2f}")
+        
+        # 创建数据库告警，关联视频路径 - 使用try/except包装以避免应用上下文错误
+        try:
+            from app import create_app
+            app = create_app()
+            with app.app_context():
+                create_alert(
+                    event_type="violence_detection",
+                    details=f"检测到高概率暴力行为，置信度 {violence_prob:.2f}",
+                    video_path=output_url
+                )
+        except Exception as e:
+            print(f"创建数据库告警失败: {e}")
     elif violence_prob > 0.5:
         alerts.append("caution: 检测到可能的暴力行为")
+        
+        # 同时添加内存告警和数据库告警
         add_alert(f"Possible violence detected ({violence_prob:.2f}).",
                  event_type="violence_detection", 
                  details=f"检测到可能的暴力行为，置信度 {violence_prob:.2f}")
+        
+        # 创建数据库告警，关联视频路径 - 使用try/except包装以避免应用上下文错误
+        try:
+            from app import create_app
+            app = create_app()
+            with app.app_context():
+                create_alert(
+                    event_type="violence_detection",
+                    details=f"检测到可能的暴力行为，置信度 {violence_prob:.2f}",
+                    video_path=output_url
+                )
+        except Exception as e:
+            print(f"创建数据库告警失败: {e}")
     else:
         alerts.append("safe: 未检测到明显暴力行为")
 
@@ -813,12 +972,34 @@ def save_snapshot(frame):
     """保存当前帧的快照并返回相对路径"""
     timestamp = int(time.time() * 1000)
     filename = f"snapshot_{timestamp}.jpg"
+    
+    # 确保快照目录存在
+    os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+    
     filepath = os.path.join(SNAPSHOTS_DIR, filename)
     
     try:
         cv2.imwrite(filepath, frame)
+        # 记录系统日志
+        log_info('detection', f'保存告警快照: {filename}')
+        
+        # 确保快照可以通过API访问
+        # 创建一个硬链接到uploads目录
+        uploads_snapshots_dir = os.path.join(os.path.dirname(SNAPSHOTS_DIR), 'uploads', 'snapshots')
+        os.makedirs(uploads_snapshots_dir, exist_ok=True)
+        
+        uploads_filepath = os.path.join(uploads_snapshots_dir, filename)
+        # 如果目标文件已存在，先删除
+        if os.path.exists(uploads_filepath):
+            os.remove(uploads_filepath)
+            
+        # 复制文件
+        import shutil
+        shutil.copy2(filepath, uploads_filepath)
+        
         # 返回可供前端访问的相对URL
         return f"/api/files/snapshots/{filename}"
     except Exception as e:
+        log_error('detection', f'快照保存失败: {str(e)}')
         print(f"快照保存失败: {e}")
         return None

@@ -43,7 +43,8 @@ def create_app():
     # 在蓝图导入部分添加
     from app.routes.rtmp_routes import rtmp_bp  # 添加这行
     from app.routes.main import main_bp  # 添加这行导入 main_bp
-    from app.routes.alerts_routes import alerts_bp, register_swag_definitions
+    from app.routes.alerts_routes import alerts_bp, register_swag_definitions as register_alert_definitions
+    from app.routes.system_logs_routes import system_logs_bp, register_swag_definitions as register_logs_definitions
     
     # 在蓝图注册部分添加
     app.register_blueprint(rtmp_bp)  # 添加这行
@@ -55,9 +56,11 @@ def create_app():
     app.register_blueprint(auth_bp)
     app.register_blueprint(dlib_bp) # 注册 Dlib 蓝图
     app.register_blueprint(alerts_bp)
+    app.register_blueprint(system_logs_bp)
     
     # 注册 Swagger 定义
-    register_swag_definitions(swagger)
+    register_alert_definitions(swagger)
+    register_logs_definitions(swagger)
     
     add_jwt_handlers(jwt)
     

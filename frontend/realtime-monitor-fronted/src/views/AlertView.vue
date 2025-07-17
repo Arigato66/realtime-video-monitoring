@@ -2,6 +2,31 @@
   <div class="alert-info-page">
     <h1>告警中心</h1>
 
+    <!-- 新增：告警统计信息 -->
+    <div class="alert-stats">
+      <div class="stat-card">
+        <div class="stat-value">{{ stats.unprocessed }}</div>
+        <div class="stat-label">未处理</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">{{ stats.viewed }}</div>
+        <div class="stat-label">已查看</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">{{ stats.resolved }}</div>
+        <div class="stat-label">已解决</div>
+      </div>
+      <div class="stat-card total">
+        <div class="stat-value">{{ stats.total }}</div>
+        <div class="stat-label">总计</div>
+      </div>
+      <div class="stat-actions">
+        <button @click="goToSystemLogs" class="system-logs-button">
+          <i class="fa fa-list"></i> 查看系统日志
+        </button>
+      </div>
+    </div>
+
     <div class="alert-section control-section">
       <div class="filters">
         <label>
@@ -147,6 +172,27 @@
               您的浏览器不支持视频播放
             </video>
           </div>
+          
+          <!-- 新增：告警日志 -->
+          <div class="media-section">
+            <h4>告警日志</h4>
+            <div class="alert-logs">
+              <div class="log-entry">
+                <div class="log-time">{{ formatTimestamp(selectedAlert?.timestamp) }}</div>
+                <div class="log-content">
+                  <div class="log-title">告警触发</div>
+                  <div class="log-details">{{ selectedAlert?.event_type }}: {{ selectedAlert?.details }}</div>
+                </div>
+              </div>
+              <div v-if="selectedAlert?.status !== 'unprocessed'" class="log-entry">
+                <div class="log-time">{{ formatTimestamp(selectedAlert?.timestamp) }}</div>
+                <div class="log-content">
+                  <div class="log-title">状态更新</div>
+                  <div class="log-details">告警状态已更新为 "{{ getStatusText(selectedAlert?.status) }}"</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
         
         <div class="modal-footer">
@@ -167,7 +213,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { useRouter } from 'vue-router';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000/api';
 const SERVER_ROOT_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
@@ -256,15 +303,75 @@ const onImageError = (event) => {
   event.target.src = 'https://via.placeholder.com/200x120?text=Image+Error';
 };
 
-const playVideo = (alert) => {
-  if (!alert.video_path) return;
-  selectedAlert.value = alert;
-  mediaModalVisible.value = true;
+// 在 script setup 部分添加日志记录和回放功能
+const replayCache = new Map(); // 用于缓存回放数据
+
+const fetchAlertReplay = async (alertId) => {
+  // 如果缓存中已有此告警的回放数据，直接返回
+  if (replayCache.has(alertId)) {
+    return replayCache.get(alertId);
+  }
+  
+  try {
+    const response = await fetch(`${API_BASE_URL}/alerts/${alertId}/replay`);
+    if (response.ok) {
+      const data = await response.json();
+      // 将结果存入缓存
+      replayCache.set(alertId, data);
+      return data;
+    } else {
+      console.error('获取告警回放失败');
+      return null;
+    }
+  } catch (error) {
+    console.error('获取告警回放失败:', error);
+    return null;
+  }
 };
 
-const showSnapshotModal = (alert) => {
+// 修改 playVideo 函数，优化逻辑
+const playVideo = async (alert) => {
+  // 如果已经有视频路径，直接显示
+  if (alert.video_path) {
+    selectedAlert.value = alert;
+    mediaModalVisible.value = true;
+    return;
+  }
+  
+  // 尝试通过回放API获取视频路径
+  const replayData = await fetchAlertReplay(alert.id);
+  if (replayData && replayData.video_path) {
+    // 更新告警对象的视频路径
+    alert.video_path = replayData.video_path;
+    selectedAlert.value = alert;
+    mediaModalVisible.value = true;
+  } else {
+    alert('此告警没有可用的视频回放');
+  }
+};
+
+// 修改 showSnapshotModal 函数，优化逻辑
+const showSnapshotModal = async (alert) => {
+  // 如果已经显示了同一个告警，不要重复获取数据
+  if (selectedAlert.value && selectedAlert.value.id === alert.id) {
+    return;
+  }
+  
   selectedAlert.value = alert;
   mediaModalVisible.value = true;
+  
+  // 异步获取回放数据，但不阻塞UI显示
+  fetchAlertReplay(alert.id).then(replayData => {
+    if (replayData && selectedAlert.value && selectedAlert.value.id === alert.id) {
+      // 只在当前选中的告警没有变化时更新数据
+      if (replayData.video_path && !selectedAlert.value.video_path) {
+        selectedAlert.value.video_path = replayData.video_path;
+      }
+      if (replayData.frame_snapshot_path && !selectedAlert.value.frame_snapshot_path) {
+        selectedAlert.value.frame_snapshot_path = replayData.frame_snapshot_path;
+      }
+    }
+  });
 };
 
 const hideMediaModal = () => {
@@ -293,12 +400,37 @@ const getStatusText = (status) => {
   return statusMap[status] || status;
 };
 
+const router = useRouter();
+
+// 新增：告警统计
+const stats = computed(() => {
+  const result = {
+    unprocessed: 0,
+    viewed: 0,
+    resolved: 0,
+    total: alerts.value.length
+  };
+  
+  alerts.value.forEach(alert => {
+    if (alert.status in result) {
+      result[alert.status]++;
+    }
+  });
+  
+  return result;
+});
+
+// 新增：导航到系统日志
+const goToSystemLogs = () => {
+  router.push('/logs');
+};
+
 onMounted(() => {
   fetchAlerts(currentPage.value);
-  // 每30秒刷新一次告警
+  // 每60秒刷新一次告警（从30秒改为60秒，减少请求频率）
   refreshInterval = setInterval(() => {
     fetchAlerts(currentPage.value);
-  }, 30000);
+  }, 60000);
 });
 
 onUnmounted(() => {
@@ -771,6 +903,116 @@ onUnmounted(() => {
   background: #218838;
 }
 
+/* 新增告警日志样式 */
+.alert-logs {
+  background: #f8f9fa;
+  border-radius: 6px;
+  padding: 10px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.log-entry {
+  display: flex;
+  padding: 8px 0;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.log-entry:last-child {
+  border-bottom: none;
+}
+
+.log-time {
+  flex: 0 0 160px;
+  color: #666;
+  font-size: 12px;
+  padding-right: 15px;
+}
+
+.log-content {
+  flex: 1;
+}
+
+.log-title {
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 3px;
+}
+
+.log-details {
+  font-size: 13px;
+  color: #555;
+}
+
+/* 新增：告警统计样式 */
+.alert-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.stat-card {
+  flex: 1;
+  min-width: 120px;
+  background: white;
+  border-radius: 8px;
+  padding: 15px;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: transform 0.3s, box-shadow 0.3s;
+}
+
+.stat-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.stat-card.total {
+  background: #007bff;
+  color: white;
+}
+
+.stat-value {
+  font-size: 28px;
+  font-weight: bold;
+  margin-bottom: 5px;
+}
+
+.stat-label {
+  font-size: 14px;
+  color: #666;
+}
+
+.stat-card.total .stat-label {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.stat-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.system-logs-button {
+  padding: 10px 15px;
+  background: #6c757d;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 40px;
+  transition: background-color 0.3s;
+}
+
+.system-logs-button:hover {
+  background: #5a6268;
+}
+
 /* 响应式设计 */
 @media (max-width: 768px) {
   .alert-info-page {
@@ -819,6 +1061,14 @@ onUnmounted(() => {
   .modal-body,
   .modal-footer {
     padding: 15px;
+  }
+
+  .alert-stats {
+    flex-direction: column;
+  }
+  
+  .stat-card {
+    min-width: 100%;
   }
 }
 </style>
