@@ -6,7 +6,6 @@
         <button @click="goToFaceRecognitionPage" :class="{ active: currentPath === '/face' }">入站人脸</button>
         <button @click="goToMonitorPage" :class="{ active: currentPath === '/monitor' }">监控大屏</button>
         <button @click="goToAlertPage" :class="{ active: currentPath === '/alert' }">警报处置</button>
-        <button @click="goToDevicePage" :class="{ active: currentPath === '/device' }">设备信息</button>
         <button @click="goToLogsPage" :class="{ active: currentPath === '/logs' }">监控日志</button>
       </div>
     </div>
@@ -47,10 +46,6 @@ const goToFaceRecognitionPage = () => {
 
 const goToAboutPage = () => {
   router.push('/about')
-}
-
-const goToDevicePage = () => {
-  router.push('/device')
 }
 
 const goToLogsPage = () => {

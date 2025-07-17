@@ -106,12 +106,12 @@ def list_logs():
         in: query
         type: string
         format: date-time
-        description: 开始日期 (ISO格式: YYYY-MM-DDTHH:MM:SS)
+        description: '开始日期 (ISO格式: YYYY-MM-DDTHH:MM:SS)'
       - name: end_date
         in: query
         type: string
         format: date-time
-        description: 结束日期 (ISO格式: YYYY-MM-DDTHH:MM:SS)
+        description: '结束日期 (ISO格式: YYYY-MM-DDTHH:MM:SS)'
     responses:
       200:
         description: 系统日志列表

@@ -761,12 +761,19 @@ process_detection_results = process_object_detection_results
 
 # --- 新的、带结果黏滞和多线程优化的高频人脸识别逻辑 ---
 
+# 添加陌生人跟踪字典，用于记录陌生人出现的时间
+unknown_faces_tracking = {}
+# 陌生人需要持续出现的时间阈值（秒）
+UNKNOWN_FACE_THRESHOLD = 3.0
+
 def process_faces_only(frame, frame_count, state):
     """
     只进行人脸检测和识别的处理。
     使用 YOLOv8 进行检测，使用 Dlib 进行识别。
     这个函数现在直接在传入的 frame 上绘图，不再返回新的 frame。
     """
+    global unknown_faces_tracking
+    
     face_model_local = state.get('face_model')
     if face_model_local is None:
         face_model_local = YOLO(FACE_MODEL_PATH)
@@ -782,8 +789,9 @@ def process_faces_only(frame, frame_count, state):
     # 从结果中提取边界框
     boxes = [box.xyxy[0].tolist() for box in face_results[0].boxes] # 获取所有检测框
     
-    # 如果没有检测到人脸，直接返回
+    # 如果没有检测到人脸，清空陌生人跟踪记录并直接返回
     if not boxes:
+        unknown_faces_tracking = {}
         return
         
     # --- 性能诊断：步骤2 ---
@@ -795,11 +803,74 @@ def process_faces_only(frame, frame_count, state):
     # --- 打印诊断日志 ---
     print(f"DIAGNOSTICS - YOLO Detection: {t1-t0:.4f}s, Dlib Recognition: {t3-t2:.4f}s")
     
+    # 当前时间
+    current_time = time.time()
+    
+    # 创建当前帧检测到的陌生人列表，用于更新跟踪状态
+    current_unknown_faces = []
+    
     # 3. 在帧上绘制结果
     for name, box in recognized_faces:
         # 双重保险：再次确保坐标是整数
         left, top, right, bottom = [int(p) for p in box]
         color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
+        
+        # 如果是陌生人，记录其位置和时间
+        if name == "Unknown":
+            # 创建一个唯一标识符，基于人脸位置
+            face_id = f"unknown_{left}_{top}_{right}_{bottom}"
+            current_unknown_faces.append(face_id)
+            
+            # 如果是新出现的陌生人，记录初次出现时间
+            if face_id not in unknown_faces_tracking:
+                unknown_faces_tracking[face_id] = {
+                    'first_seen': current_time,
+                    'last_seen': current_time,
+                    'box': box,
+                    'alerted': False  # 是否已经触发过告警
+                }
+            else:
+                # 更新最后一次看到的时间
+                unknown_faces_tracking[face_id]['last_seen'] = current_time
+                unknown_faces_tracking[face_id]['box'] = box
+                
+                # 检查是否持续出现超过阈值时间
+                duration = current_time - unknown_faces_tracking[face_id]['first_seen']
+                
+                # 在图像上显示持续时间
+                duration_text = f"{duration:.1f}s"
+                cv2.putText(frame, duration_text, (left, top - 25), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                
+                # 如果持续时间超过阈值且尚未触发告警，则触发告警
+                if duration >= UNKNOWN_FACE_THRESHOLD and not unknown_faces_tracking[face_id]['alerted']:
+                    # 触发告警
+                    alert_message = f"检测到陌生人持续出现{UNKNOWN_FACE_THRESHOLD}秒以上"
+                    
+                    # 保存快照
+                    snapshot_path = save_snapshot(frame)
+                    
+                    # 添加内存告警
+                    add_alert(alert_message, 
+                             event_type="stranger_detection", 
+                             details=f"陌生人在位置({left},{top},{right},{bottom})持续出现{duration:.1f}秒",
+                             snapshot_path=snapshot_path)
+                    
+                    # 创建数据库告警 - 使用try/except包装以避免应用上下文错误
+                    try:
+                        from app import create_app
+                        app = create_app()
+                        with app.app_context():
+                            create_alert(
+                                event_type="stranger_detection",
+                                details=f"陌生人在位置({left},{top},{right},{bottom})持续出现{duration:.1f}秒",
+                                frame_snapshot_path=snapshot_path
+                            )
+                    except Exception as e:
+                        print(f"创建数据库告警失败: {e}")
+                    
+                    # 标记为已告警
+                    unknown_faces_tracking[face_id]['alerted'] = True
                 
         # 绘制边界框
         cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
@@ -821,7 +892,17 @@ def process_faces_only(frame, frame_count, state):
             # 空间充足，放在外部
             cv2.rectangle(frame, (left, top - label_bg_height), (left + label_width + 4, top), color, -1)
             cv2.putText(frame, label, (left + 2, top - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        
+    
+    # 清理不再出现的陌生人记录（超过5秒未见）
+    faces_to_remove = []
+    for face_id in unknown_faces_tracking:
+        if face_id not in current_unknown_faces:
+            if current_time - unknown_faces_tracking[face_id]['last_seen'] > 5.0:
+                faces_to_remove.append(face_id)
+    
+    for face_id in faces_to_remove:
+        del unknown_faces_tracking[face_id]
+    
     # 不再返回 frame，因为是直接在原图上修改
     # return frame
 

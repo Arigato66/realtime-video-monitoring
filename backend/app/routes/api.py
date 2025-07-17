@@ -191,7 +191,7 @@ def get_alerts():
     tags:
       - 通用及测试API
     summary: 获取内存中的告警列表
-    description: 获取当前存储在内存中的临时告警信息列表。这些告警是即时的，服务重启后会丢失。要获取持久化的历史告警，请使用 /api/alerts/ 接口。
+    description: 获取当前存储在内存中的临时告警信息列表。这些告警是即时的，服务重启后会丢失。要获取持久化的历史告警，请使用 '/api/alerts/' 接口。
     responses:
       200:
         description: 成功获取内存告警列表

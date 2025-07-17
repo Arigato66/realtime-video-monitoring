@@ -47,11 +47,6 @@ const router = createRouter({
       component: () => import('../views/AlertView.vue')
     },
     {
-      path: '/device',
-      name: 'device',
-      component: () => import('../views/DeviceView.vue')
-    },
-    {
       path: '/logs',
       name: 'logs',
       component: LogsView,
