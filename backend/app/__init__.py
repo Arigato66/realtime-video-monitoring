@@ -13,7 +13,7 @@ bcrypt = Bcrypt()
 jwt = JWTManager()
 socketio = SocketIO() # 创建 SocketIO 实例
 
-def create_app():
+def create_app(config_name=None):
 
     # 解决 "OMP: Error #15" 警告
     os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
