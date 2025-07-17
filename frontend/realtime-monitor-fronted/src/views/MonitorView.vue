@@ -11,8 +11,10 @@
             <img src="https://via.placeholder.com/100" alt="用户头像">
           </div>
           <div class="name-role">
-            <h2>张三</h2>
-            <p>管理员</p>
+            <!-- 显示登录用户名（从loginUser中获取） -->
+            <h2>{{ loginUser?.username || '未登录' }}</h2>
+            <!-- 显示角色（如果后端返回角色，否则默认管理员） -->
+            <p>{{ loginUser?.role || '管理员' }}</p>
           </div>
         </div>
       </div>
@@ -292,6 +294,9 @@ import Sidebar from '../components/Sidebar.vue'
 
 // 当前路径状态
 const currentPath = ref('')
+
+// 存储登录用户信息（响应式）
+const loginUser = ref(null);
 
 // API端点设置
 const SERVER_ROOT_URL = 'http://localhost:5000'
@@ -1176,6 +1181,11 @@ const handleRightClick = (event) => {
 
 // 生命周期钩子
 onMounted(() => {
+  // 从localStorage读取用户信息（登录时已存储）
+  const storedUser = localStorage.getItem('user');
+  if (storedUser) {
+    loginUser.value = JSON.parse(storedUser);
+  }
   loadConfig()
   loadRegisteredUsers() // 页面加载时获取已注册用户
   loadDetectionMode() // 新增：页面加载时获取当前检测模式

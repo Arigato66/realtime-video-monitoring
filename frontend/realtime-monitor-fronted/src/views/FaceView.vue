@@ -11,8 +11,10 @@
             <img src="https://via.placeholder.com/100" alt="用户头像">
           </div>
           <div class="name-role">
-            <h2>张三</h2>
-            <p>管理员</p>
+            <!-- 修改：使用 username 计算属性 -->
+            <h2>{{ username }}</h2>
+            <!-- 修改：使用 role 计算属性 -->
+            <p>{{ role }}</p>
           </div>
         </div>
       </div>
@@ -111,13 +113,21 @@
 </template>
 
 <script setup>
+
+import { ref, onMounted, onUnmounted, nextTick, computed } from 'vue' 
+import { useAuthStore } from '@/stores/auth' 
 import { useRoute } from 'vue-router'
-import { ref, onMounted, onUnmounted } from 'vue'
 // 导入侧边栏组件
 import Sidebar from '../components/Sidebar.vue'
 
-// 获取当前路由路径
+// 获取当前登录用户信息
 const route = useRoute()
+const authStore = useAuthStore()
+const user = computed(() => authStore.user) // 响应式跟踪用户信息
+const username = computed(() => user.value?.username || '未登录') // 用户名
+const role = computed(() => user.value?.role || '管理员') // 角色（如果后端返回角色）
+
+// 获取当前路由
 const currentPath = route.path
 
 // API端点设置
