@@ -93,9 +93,8 @@ router.beforeEach((to, from, next) => {
   }
 })
 
-
 // 全局后置守卫：导航完成后执行（状态校验）
-router.afterEach((to, from) => {
+router.afterEach(() => {
   const authStore = useAuthStore();
   
   // 如果 token 无效但用户仍处于登录状态，强制登出

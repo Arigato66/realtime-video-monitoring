@@ -3,6 +3,7 @@ import os
 from werkzeug.security import check_password_hash
 from app.config import config
 
+
 class LoginService:
     def __init__(self):
         # 根据当前环境获取配置

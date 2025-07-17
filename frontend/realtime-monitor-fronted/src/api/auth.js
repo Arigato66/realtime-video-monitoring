@@ -6,7 +6,7 @@ import router from '@/router'; // 确保正确导入路由实例
 // 创建统一的axios实例（合并基础URL配置）
 const api = axios.create({
   baseURL: 'http://localhost:5000/api/v1.0', // 使用更具体的版本化URL
-  timeout: 5000,
+  timeout: 15000,
 });
 
 // 请求拦截器：统一添加Token

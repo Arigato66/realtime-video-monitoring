@@ -36,7 +36,7 @@ def create_app(config_name=None):
     print(f"🔧 当前运行环境: {config_name}")
     print(f"🔧 数据库URI: {app.config['SQLALCHEMY_DATABASE_URI'][:50]}...")
     
-    # 动态CORS配置
+    # 动态CORS配置 - 解决多源头问题
     cors_origins = app.config.get('CORS_ORIGINS', [
         "http://localhost:5173", 
         "http://127.0.0.1:5173", 
@@ -45,24 +45,14 @@ def create_app(config_name=None):
     
     print(f"🌐 允许的CORS来源: {cors_origins}")
     
-    # 配置CORS
+    # 使用Flask-CORS统一处理CORS - 删除自定义OPTIONS处理器
     CORS(app,
         origins=cors_origins,
         supports_credentials=True,
         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization", "Access-Control-Allow-Credentials"]
+        allow_headers=["Content-Type", "Authorization", "Access-Control-Allow-Credentials"],
+        max_age=3600
     )
-    
-    # 处理OPTIONS预检请求
-    @app.before_request
-    def handle_options_request():
-        if request.method == 'OPTIONS':
-            return jsonify({"status": "preflight OK"}), 200, {
-                'Access-Control-Allow-Origin': ', '.join(cors_origins),
-                'Access-Control-Allow-Methods': "GET, POST, PUT, DELETE, OPTIONS",
-                'Access-Control-Allow-Headers': "Content-Type, Authorization",
-                'Access-Control-Max-Age': "3600"
-            }
     
     # 初始化扩展
     Swagger(app)
@@ -163,8 +153,6 @@ def add_error_handlers(app):
 
     @app.errorhandler(405)
     def method_not_allowed(error):
-        if request.method == 'OPTIONS':
-            return jsonify({"status": "preflight allowed"}), 200
         return jsonify({
             "error": "方法不允许",
             "message": str(error)

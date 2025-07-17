@@ -17,6 +17,8 @@ import { useRouter, useRoute } from 'vue-router'
 import Sidebar from '../components/Sidebar.vue'  // 假设侧边栏组件文件名为 Sidebar.vue，需根据实际路径调整
 import { computed } from 'vue' 
 import { useAuthStore } from '@/stores/auth'
+import TopBar from '@/components/TopBar.vue' 
+
 
 const router = useRouter()
 const route = useRoute()
