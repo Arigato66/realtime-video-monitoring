@@ -18,7 +18,7 @@ def download_file(url, save_path, description=None):
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         
-        desc = description if description else f"Downloading {os.path.basename(save_path)}"
+        desc = description if description else f"下载 {os.path.basename(save_path)}"
         
         with open(save_path, 'wb') as file, tqdm(
             desc=desc,
@@ -31,16 +31,16 @@ def download_file(url, save_path, description=None):
                 size = file.write(data)
                 bar.update(size)
                 
-        print(f"Successfully downloaded to {save_path}")
+        print(f"成功下载到 {save_path}")
         return True
     except Exception as e:
-        print(f"Error downloading file: {e}")
+        print(f"下载文件时出错: {e}")
         return False
 
 def download_and_extract_zip(url, extract_dir, description=None):
     """Download a zip file and extract its contents"""
     try:
-        print(f"Downloading zip from {url}")
+        print(f"正在从 {url} 下载压缩文件")
         response = requests.get(url, stream=True)
         response.raise_for_status()
         
@@ -51,7 +51,7 @@ def download_and_extract_zip(url, extract_dir, description=None):
         os.makedirs(extract_dir, exist_ok=True)
         
         # Download with progress bar
-        desc = description if description else f"Downloading zip"
+        desc = description if description else f"下载压缩文件"
         
         # Download to memory
         content = io.BytesIO()
@@ -69,13 +69,13 @@ def download_and_extract_zip(url, extract_dir, description=None):
         # Extract zip
         content.seek(0)
         with zipfile.ZipFile(content) as z:
-            print(f"Extracting to {extract_dir}")
+            print(f"正在解压到 {extract_dir}")
             z.extractall(extract_dir)
             
-        print(f"Successfully extracted to {extract_dir}")
+        print(f"成功解压到 {extract_dir}")
         return True
     except Exception as e:
-        print(f"Error downloading or extracting zip: {e}")
+        print(f"下载或解压文件时出错: {e}")
         return False
 
 def download_required_models():
@@ -84,38 +84,25 @@ def download_required_models():
     current_dir = os.path.dirname(os.path.abspath(__file__))
     app_dir = os.path.dirname(current_dir)
     
-    # Create directories if they don't exist
-    blink_model_dir = os.path.join(current_dir, 'blink_detection', 'model_landmarks')
-    os.makedirs(blink_model_dir, exist_ok=True)
+    # 下载情绪检测模型
+    emotion_model_dir = os.path.join(current_dir, 'emotion_detection', 'Modelos')
+    os.makedirs(emotion_model_dir, exist_ok=True)
     
-    # Download facial landmark predictor
-    landmark_file = os.path.join(blink_model_dir, 'shape_predictor_68_face_landmarks.dat')
-    if not os.path.exists(landmark_file):
-        print("Downloading facial landmark predictor model...")
-        landmark_url = "https://github.com/davisking/dlib-models/raw/master/shape_predictor_68_face_landmarks.dat.bz2"
+    emotion_model_file = os.path.join(emotion_model_dir, 'model_dropout.hdf5')
+    if not os.path.exists(emotion_model_file):
+        print("情绪检测模型不存在，尝试下载...")
+        # 这里需要提供一个有效的下载链接，这只是一个示例
+        emotion_model_url = "https://github.com/oarriaga/face_classification/raw/master/trained_models/emotion_models/fer2013_mini_XCEPTION.102-0.66.hdf5"
         try:
-            import bz2
-            response = requests.get(landmark_url, stream=True)
-            response.raise_for_status()
-            
-            # Decompress bz2 file
-            decompressed_data = bz2.decompress(response.content)
-            
-            # Save decompressed data
-            with open(landmark_file, 'wb') as f:
-                f.write(decompressed_data)
-                
-            print(f"Successfully downloaded and extracted to {landmark_file}")
+            download_file(emotion_model_url, emotion_model_file, "下载情绪检测模型")
+            print(f"情绪检测模型已下载到 {emotion_model_file}")
         except Exception as e:
-            print(f"Error downloading facial landmark model: {e}")
-            print("Trying alternative download...")
-            # Alternative download link
-            alt_url = "https://github.com/AKSHAYUBHAT/TensorFace/raw/master/openface/models/dlib/shape_predictor_68_face_landmarks.dat"
-            download_file(alt_url, landmark_file, "Downloading facial landmark model (alternative)")
+            print(f"下载情绪检测模型失败: {e}")
+            print("请手动下载情绪检测模型并放置在 app/services/emotion_detection/Modelos/ 目录下")
     else:
-        print(f"Facial landmark model already exists at {landmark_file}")
+        print(f"情绪检测模型已存在于 {emotion_model_file}")
     
-    # Check if haarcascade files exist, download if not
+    # 下载人脸检测模型
     haarcascade_dir = os.path.join(current_dir, 'profile_detection', 'haarcascades')
     os.makedirs(haarcascade_dir, exist_ok=True)
     
@@ -127,12 +114,12 @@ def download_required_models():
     for filename, url in haarcascade_files.items():
         file_path = os.path.join(haarcascade_dir, filename)
         if not os.path.exists(file_path):
-            print(f"Downloading {filename}...")
-            download_file(url, file_path, f"Downloading {filename}")
+            print(f"下载 {filename}...")
+            download_file(url, file_path, f"下载 {filename}")
         else:
-            print(f"{filename} already exists at {file_path}")
+            print(f"{filename} 已存在于 {file_path}")
     
-    print("All required models have been downloaded.")
+    print("所有必要的模型文件已下载完成。")
 
 if __name__ == "__main__":
     download_required_models() 

@@ -7,6 +7,10 @@ import os
 import time
 import threading
 
+# 创建一个互斥锁和全局变量，用于防止多个活体检测实例同时运行
+face_anti_spoofing_lock = threading.Lock()
+face_anti_spoofing_running = False
+
 # Create API blueprint
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -59,7 +63,7 @@ def get_alerts():
     from app.services.alerts import get_alerts as get_alerts_service
     return jsonify({"alerts": get_alerts_service()})
 
-# 新增：启动活体检测的API端点
+# 启动活体检测的API端点
 @api_bp.route("/start_face_anti_spoofing", methods=["POST"])
 def start_face_anti_spoofing():
     """启动活体检测
@@ -79,28 +83,37 @@ def start_face_anti_spoofing():
               type: string
               example: Face anti-spoofing started
     """
+    global face_anti_spoofing_running
+    
+    # 检查活体检测是否已经在运行
+    with face_anti_spoofing_lock:
+        if face_anti_spoofing_running:
+            return jsonify({
+                "status": "warning",
+                "message": "Face anti-spoofing is already running"
+            })
+        face_anti_spoofing_running = True
+    
     try:
         # 导入活体检测函数和模型下载函数
         from app.services.face_anti_spoofing import run_face_anti_spoofing
         from app.services.download_models import download_required_models
         
-        # 确保之前的视频流已停止
-        from app.services.video import stop_video_feed_service
-        stop_video_feed_service()
-        
-        # 等待资源释放
-        time.sleep(1)
-        
         # 先下载所需的模型文件
         def download_and_run():
+            global face_anti_spoofing_running
             try:
                 # 下载所需模型
                 download_required_models()
                 
-                # 启动活体检测
+                # 启动活体检测（在单独窗口中运行，不推流到前端）
                 run_face_anti_spoofing()
             except Exception as e:
                 print(f"活体检测过程中出现错误: {str(e)}")
+            finally:
+                # 无论如何，运行结束后重置标志
+                with face_anti_spoofing_lock:
+                    face_anti_spoofing_running = False
         
         # 启动活体检测线程
         thread = threading.Thread(target=download_and_run)
@@ -109,9 +122,13 @@ def start_face_anti_spoofing():
         
         return jsonify({
             "status": "success",
-            "message": "Face anti-spoofing started"
+            "message": "Face anti-spoofing started in a separate window"
         })
     except Exception as e:
+        # 发生异常时，重置运行标志
+        with face_anti_spoofing_lock:
+            face_anti_spoofing_running = False
+        
         return jsonify({
             "status": "error",
             "message": f"Failed to start face anti-spoofing: {str(e)}"

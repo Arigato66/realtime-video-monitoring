@@ -2,7 +2,6 @@ def question_bank(index):
     questions = [
                  "smile",
                  "surprise",
-                 "blink eyes",
                  "angry",
                  "turn face right",
                  "turn face left"]
@@ -45,12 +44,6 @@ def challenge_result(question, out_model, blinks_up):
         if len(out_model["orientation"]) == 0:
             challenge = "fail"
         elif out_model["orientation"][0] == "left": 
-            challenge = "pass"
-        else:
-            challenge = "fail"
-
-    elif question == "blink eyes":
-        if blinks_up == 1: 
             challenge = "pass"
         else:
             challenge = "fail"

@@ -111,7 +111,8 @@
                   </button>
                   <button 
                     @click="setDetectionMode('face_anti_spoofing')" 
-                    :class="{ active: detectionMode === 'face_anti_spoofing' }">
+                    :class="{ active: detectionMode === 'face_anti_spoofing' }"
+                    data-mode="face_anti_spoofing">
                     活体检测
                   </button>
                 </div>
@@ -366,10 +367,25 @@ const setDetectionMode = async (mode) => {
 // 添加启动活体检测的函数
 const startFaceAntiSpoofing = async () => {
   try {
+    // 禁用按钮，防止重复点击
+    const faceAntiSpoofingButton = document.querySelector('button[data-mode="face_anti_spoofing"]');
+    if (faceAntiSpoofingButton) {
+      faceAntiSpoofingButton.disabled = true;
+      setTimeout(() => {
+        faceAntiSpoofingButton.disabled = false;
+      }, 3000); // 3秒后恢复按钮
+    }
+    
     const data = await apiFetch('/start_face_anti_spoofing', {
       method: 'POST'
     });
-    console.log(data.message);
+    
+    if (data.status === 'warning') {
+      console.log(data.message);
+      alert('活体检测已经在运行中，请勿重复启动');
+    } else {
+      console.log(data.message);
+    }
   } catch (error) {
     // apiFetch中已处理错误
   }

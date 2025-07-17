@@ -6,7 +6,6 @@ import os
 from app.services import f_utils
 from app.services.profile_detection import f_detector
 from app.services.emotion_detection import f_emotion_detection
-from app.services.blink_detection import f_blink_detection
 import numpy as np
 import dlib
 from app.services import config
@@ -17,11 +16,6 @@ USE_DLIB = True
 
 # 检查并下载所需的模型文件
 def ensure_models_exist():
-    # 检查眼睛关键点检测模型
-    if not os.path.exists(config.eye_landmarks):
-        print("眼睛关键点检测模型不存在，正在下载...")
-        download_required_models()
-    
     # 检查情绪检测模型
     if not os.path.exists(config.path_model):
         print("情绪检测模型不存在，请确保已下载模型文件")
@@ -72,12 +66,6 @@ try:
     print("成功初始化情绪检测器")
 except Exception as e:
     print(f"初始化情绪检测器失败: {str(e)}")
-
-try:
-    blink_detector = f_blink_detection.eye_blink_detector()
-    print("成功初始化眨眼检测器")
-except Exception as e:
-    print(f"初始化眨眼检测器失败: {str(e)}")
 
 def detect_faces(gray):
     """根据不同的检测器类型检测人脸"""
@@ -150,7 +138,7 @@ def run_face_anti_spoofing():
     counter_ok_questions = 0
     counter_ok_consecutives = 0
     limit_consecutives = 3
-    limit_questions = 6
+    limit_questions = 5  # 修改为5个问题，因为删除了眨眼检测
     counter_try = 0
     limit_try = 50 
     
@@ -169,7 +157,7 @@ def run_face_anti_spoofing():
         
         for i_questions in range(0, limit_questions):
             # 生成随机问题
-            index_question = random.randint(0, 5)
+            index_question = random.randint(0, 4)  # 修改为0-4，因为删除了眨眼检测
             question = questions.question_bank(index_question)
             
             print(f"当前问题: {question}")
@@ -213,18 +201,12 @@ def run_face_anti_spoofing():
                     # 情绪检测
                     _, emotion = emotion_detector.get_emotion(im, boxes_face)
                     
-                    # 眨眼检测
-                    if USE_DLIB:
-                        COUNTER, TOTAL = blink_detector.eye_blink(gray, rectangles, COUNTER, TOTAL)
-                    else:
-                        # 如果使用OpenCV检测器，可能需要特殊处理眨眼检测
-                        if rectangles:
-                            COUNTER, TOTAL = blink_detector.eye_blink(gray, rectangles, COUNTER, TOTAL)
+                    # 在图像上绘制人脸框
+                    x0, y0, x1, y1 = boxes_face[0]
+                    cv2.rectangle(im, (x0, y0), (x1, y1), (0, 255, 0), 2)
                 else:
                     boxes_face = []
                     emotion = []
-                    TOTAL = 0
-                    COUNTER = 0
                 
                 # 侧脸检测
                 box_orientation, orientation = profile_detector.face_orientation(gray)
@@ -234,23 +216,11 @@ def run_face_anti_spoofing():
                     'box_face_frontal': boxes_face,
                     'box_orientation': box_orientation,
                     'emotion': emotion,
-                    'orientation': orientation,
-                    'total_blinks': TOTAL,
-                    'count_blinks_consecutives': COUNTER
+                    'orientation': orientation
                 }
                 
-                # 检查当前眨眼次数与上次的差异
-                TOTAL_0 = TOTAL
-                dif_blink = TOTAL - TOTAL_0
-                
-                if dif_blink > 0:
-                    blinks_up = 1
-                    print(f"检测到眨眼！总计: {TOTAL}")
-                else:
-                    blinks_up = 0
-                
                 # 判断挑战结果
-                challenge_res = questions.challenge_result(question, output, blinks_up)
+                challenge_res = questions.challenge_result(question, output, 0)  # 第三个参数不再使用
                 
                 # 显示当前状态
                 im = show_image(cam, question)
@@ -301,6 +271,9 @@ def run_face_anti_spoofing():
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         break
                     time.sleep(0.1)
+                
+                # 显示3秒后自动关闭窗口
+                time.sleep(3)
                 break
             elif i_try == limit_try - 1:
                 while True:
@@ -312,6 +285,9 @@ def run_face_anti_spoofing():
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         break
                     time.sleep(0.1)
+                
+                # 显示3秒后自动关闭窗口
+                time.sleep(3)
                 break
             else:
                 continue
