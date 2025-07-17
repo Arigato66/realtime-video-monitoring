@@ -91,9 +91,13 @@ interface Device {
   streamUrl: string;
 }
 
-// API端点设置
-const SERVER_ROOT_URL = 'http://localhost:5000';
-const API_BASE_URL = `${SERVER_ROOT_URL}/api`;
+// 删除这些重复的声明（第81-83行）：
+// const SERVER_ROOT_URL = 'http://localhost:5000';
+// const API_BASE_URL = `${SERVER_ROOT_URL}/api`;
+
+// API端点设置（修改后）
+const SERVER_ROOT_URL = ''; // 使用相对路径
+const API_BASE_URL = '/api';
 
 // 状态变量（指定类型为Device数组）
 const devices = ref<Device[]>([]);
