@@ -104,19 +104,21 @@ def list_alerts():
               example: '服务器内部错误'
     """
     try:
-        page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 10, type=int)
+        # 强制获取最新的10条数据，忽略分页参数
+        page = 1
+        per_page = 10
         status = request.args.get('status', None, type=str)
         
         # 记录系统日志
-        log_info('alerts', f'获取告警列表 (页码: {page}, 每页: {per_page}, 状态过滤: {status or "全部"})')
+        log_info('alerts', f'获取最新的 {per_page} 条告警 (状态过滤: {status or "全部"})')
         
         paginated_alerts = get_all_alerts(page=page, per_page=per_page, status=status)
         return jsonify({
             'alerts': [alert.to_dict() for alert in paginated_alerts.items],
-            'total': paginated_alerts.total,
-            'pages': paginated_alerts.pages,
-            'current_page': paginated_alerts.page
+            # 返回一个简化版的响应，因为不再有分页
+            'total': len(paginated_alerts.items),
+            'pages': 1,
+            'current_page': 1
         })
     except Exception as e:
         log_error('alerts', f'获取告警列表失败: {str(e)}')

@@ -19,11 +19,6 @@ const router = createRouter({
       component: () => import('../views/AboutView.vue')
     },
     {
-      path: '/face',
-      name: 'face',
-      component: () => import('../views/FaceView.vue')
-    },
-    {
       path: '/monitor',
       name: 'monitor',
       component: () => import('../views/MonitorView.vue')
