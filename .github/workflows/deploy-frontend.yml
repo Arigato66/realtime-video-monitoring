@@ -6,7 +6,7 @@ on:
   # 当有代码推送到 main 分支时
   push:
     branches:
-      - main
+      - zjz-branch
     # 并且，只有当 frontend 目录或其子目录下的文件发生变动时才触发
     paths:
       - 'frontend/**'
