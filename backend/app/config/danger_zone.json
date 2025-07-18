@@ -1,22 +1,18 @@
 {
     "danger_zone": [
         [
-            628,
-            71
+            578,
+            341
         ],
         [
-            624,
-            448
+            619,
+            450
         ],
         [
-            548,
-            449
-        ],
-        [
-            553,
-            70
+            579,
+            460
         ]
     ],
-    "safety_distance": 65,
+    "safety_distance": 130,
     "loitering_threshold": 0.5
 }

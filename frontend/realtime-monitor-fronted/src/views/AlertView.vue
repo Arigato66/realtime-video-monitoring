@@ -61,14 +61,14 @@
           <Filter class="w-4 h-4" />
           <span>状态过滤:</span>
         </label>
-        <select v-model="filterStatus" @change="fetchAlerts" class="filter-select">
+        <select v-model="filterStatus" @change="fetchAlerts(1)" class="filter-select">
           <option value="">所有状态</option>
           <option value="unprocessed">未处理</option>
           <option value="viewed">已查看</option>
           <option value="resolved">已解决</option>
         </select>
       </div>
-      <button @click="fetchAlerts" class="refresh-button">
+      <button @click="fetchAlerts(currentPage)" class="refresh-button">
         <RefreshCw class="w-4 h-4" />
         <span>刷新</span>
       </button>
@@ -117,6 +117,21 @@
         <h3>当前无告警信息</h3>
         <p>所有系统均正常运行。</p>
       </div>
+    </div>
+
+    <!-- 分页 -->
+    <div class="pagination-controls" v-if="totalPages > 1">
+        <button @click="fetchAlerts(currentPage - 1)" :disabled="currentPage <= 1" class="page-button">
+          <ChevronLeft class="w-4 h-4" />
+          <span>上一页</span>
+        </button>
+        <div class="page-numbers">
+          <span>第 {{ currentPage }} / {{ totalPages }} 页 (共 {{ totalItems }} 条)</span>
+        </div>
+        <button @click="fetchAlerts(currentPage + 1)" :disabled="currentPage >= totalPages" class="page-button">
+          <span>下一页</span>
+          <ChevronRight class="w-4 h-4" />
+        </button>
     </div>
 
     <!-- 媒体查看模态框 -->
@@ -186,17 +201,20 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000/api'
 const SERVER_ROOT_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
 
 const alerts = ref([]);
+const currentPage = ref(1);
+const totalPages = ref(1);
+const totalItems = ref(0);
 const filterStatus = ref('');
 const mediaModalVisible = ref(false);
 const selectedAlert = ref(null);
 let refreshInterval = null;
 
-const fetchAlerts = async () => {
+const fetchAlerts = async (page = 1) => {
   try {
-    // API现在总是返回最新的10条
-    let url = `${API_BASE_URL}/alerts/`;
+    // 使用数据库告警API (注意末尾的斜杠)
+    let url = `${API_BASE_URL}/alerts/?page=${page}&per_page=10`;
     if (filterStatus.value) {
-      url += `?status=${filterStatus.value}`;
+      url += `&status=${filterStatus.value}`;
     }
     
     const response = await fetch(url);
@@ -204,8 +222,14 @@ const fetchAlerts = async () => {
     
     if (data.alerts) {
       alerts.value = data.alerts;
+      currentPage.value = data.page || page;
+      totalPages.value = data.pages || 1;
+      totalItems.value = data.total || data.alerts.length;
     } else {
       alerts.value = [];
+      currentPage.value = 1;
+      totalPages.value = 1;
+      totalItems.value = 0;
     }
   } catch (error) {
     console.error('获取告警失败:', error);
@@ -383,10 +407,10 @@ const goToSystemLogs = () => {
 };
 
 onMounted(() => {
-  fetchAlerts();
+  fetchAlerts(currentPage.value);
   // 每60秒刷新一次告警（从30秒改为60秒，减少请求频率）
   refreshInterval = setInterval(() => {
-    fetchAlerts();
+    fetchAlerts(currentPage.value);
   }, 60000);
 });
 
