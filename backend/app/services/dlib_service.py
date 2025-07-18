@@ -32,7 +32,10 @@ class DlibFaceService:
         
         # --- 新增：为并行处理创建一个可复用的线程池 ---
         # CPU核心数的一半是一个比较合理的线程数，避免过度竞争
-        max_workers = max(1, os.cpu_count() // 2)
+        cpu_count = os.cpu_count()
+        if cpu_count is None:
+            cpu_count = 2  # 默认值，避免None
+        max_workers = max(1, cpu_count // 2)
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
 
         # 1. 加载 Dlib 模型
@@ -48,6 +51,8 @@ class DlibFaceService:
         # 2. 加载已知人脸特征数据库
         self.face_feature_known_list = []
         self.face_name_known_list = []
+        # 添加特征向量缓存，提高性能
+        self.feature_array = None
         self.load_face_database()
     
     def load_face_database(self):
@@ -65,6 +70,9 @@ class DlibFaceService:
                     # 后面的128列是特征
                     features = [float(x) for x in csv_rd.iloc[i][1:].values]
                     self.face_feature_known_list.append(features)
+                
+                # 优化: 预先将特征列表转换为NumPy数组，加速后续运算
+                self.feature_array = np.array(self.face_feature_known_list)
                 logging.info(f"成功从 CSV 加载 {len(self.face_name_known_list)} 个已知人脸特征。")
             except Exception as e:
                 logging.error(f"从 CSV 加载特征时出错: {e}")
@@ -74,22 +82,32 @@ class DlibFaceService:
     def _recognize_single_face(self, args):
         """
         [内部工作函数] 在单个线程中处理一张人脸。
+        优化版本：使用缓存的特征数组，避免重复转换。
         """
-        frame, box = args
+        frame, box, feature_array = args
         left, top, right, bottom = [int(p) for p in box]
-        dlib_rect = dlib.rectangle(left, top, right, bottom)
         
-        shape = self.predictor(frame, dlib_rect)
-        features = self.face_reco_model.compute_face_descriptor(frame, shape)
-        features = np.array(features)
-        
-        distances = np.linalg.norm(np.array(self.face_feature_known_list) - features, axis=1)
-        
-        if len(distances) > 0:
-            min_index = np.argmin(distances)
-            min_distance = distances[min_index]
-            if min_distance < 0.4:
-                return (self.face_name_known_list[min_index], box)
+        try:
+            # 创建dlib矩形
+            dlib_rect = dlib.rectangle(left, top, right, bottom)
+            
+            # 提取人脸特征
+            shape = self.predictor(frame, dlib_rect)
+            features = self.face_reco_model.compute_face_descriptor(frame, shape)
+            features = np.array(features)
+            
+            # 使用向量化操作计算距离
+            if len(feature_array) > 0:
+                # 计算L2距离
+                distances = np.linalg.norm(feature_array - features, axis=1)
+                min_index = np.argmin(distances)
+                min_distance = distances[min_index]
+                
+                # 优化阈值调整，可根据实际情况调整
+                if min_distance < 0.42:  # 略微调高阈值，提高匹配率
+                    return (self.face_name_known_list[min_index], box)
+        except Exception as e:
+            logging.error(f"人脸识别出错: {e}")
         
         return ("Unknown", box)
 
@@ -100,12 +118,23 @@ class DlibFaceService:
         if not self.face_name_known_list or not face_boxes:
             return [("Unknown", box) for box in face_boxes]
 
-        # 将任务打包，准备并行处理
-        tasks = [(frame, box) for box in face_boxes]
+        # 优化1: 减少处理人脸的数量，如果人脸太多可能会影响性能
+        if len(face_boxes) > 10:
+            # 根据人脸大小排序，只处理最大的10个
+            face_boxes = sorted(face_boxes, key=lambda box: (box[2]-box[0])*(box[3]-box[1]), reverse=True)[:10]
+
+        # 优化2: 批量准备任务，包括预先缓存的特征数组
+        feature_array = self.feature_array
+        tasks = [(frame, box, feature_array) for box in face_boxes]
         
-        # 使用线程池并行执行识别任务
+        # 优化3: 调整并行策略，根据人脸数量决定是否使用多线程
         try:
-            results = list(self.executor.map(self._recognize_single_face, tasks))
+            if len(tasks) <= 3:
+                # 人脸较少时，不使用多线程以减少开销
+                results = [self._recognize_single_face(task) for task in tasks]
+            else:
+                # 人脸较多时使用多线程
+                results = list(self.executor.map(self._recognize_single_face, tasks))
             return results
         except Exception as e:
             logging.error(f"人脸识别多线程处理出错: {e}")
@@ -145,7 +174,10 @@ class DlibFaceService:
                 del self.face_name_known_list[i]
                 del self.face_feature_known_list[i]
 
-            # 3. 重建 features_all.csv 文件
+            # 3. 更新预计算特征数组
+            self.feature_array = np.array(self.face_feature_known_list)
+            
+            # 4. 重建 features_all.csv 文件
             self._rebuild_features_csv()
             
             logging.info(f"成功删除人员 '{name}' 并重建了特征文件。")
@@ -207,6 +239,9 @@ class DlibFaceService:
 
         self.face_name_known_list.append(name)
         self.face_feature_known_list.append(list(features))
+        
+        # 更新特征数组缓存
+        self.feature_array = np.array(self.face_feature_known_list)
 
         logging.info(f"为 '{name}' 成功捕获并保存了第 {img_num} 张人脸特征。")
         return {"status": "success", "message": f"成功捕获第 {img_num} 张图片", "count": img_num}

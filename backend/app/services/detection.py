@@ -20,6 +20,8 @@ from app.services.smoking_detection_service import SmokingDetectionService
 import time
 from concurrent.futures import ThreadPoolExecutor
 from app.services import violenceDetect
+from .liveness_detection import LivenessDetector
+=======
 # --- 新增：导入config模块以访问其状态 ---
 from app.routes import config as config_state
 # --- 结束新增 ---
@@ -771,38 +773,115 @@ def process_faces_only(frame, frame_count, state):
     只进行人脸检测和识别的处理。
     使用 YOLOv8 进行检测，使用 Dlib 进行识别。
     这个函数现在直接在传入的 frame 上绘图，不再返回新的 frame。
+    
+    优化点：
+    1. 每N帧才运行一次完整识别
+    2. 结果缓存，减少不必要的重复识别
+    3. 检测区域缩放以提高性能
     """
+    # 添加识别结果缓存到状态
+    if 'recognized_faces' not in state:
+        state['recognized_faces'] = {}
+    if 'last_full_recognition_frame' not in state:
+        state['last_full_recognition_frame'] = 0
+    
+    # 获取本地人脸模型
+
     global unknown_faces_tracking
     
     face_model_local = state.get('face_model')
     if face_model_local is None:
         face_model_local = YOLO(FACE_MODEL_PATH)
         state['face_model'] = face_model_local
-
+    
+    # 1. 处理缩放的图像进行检测（提高性能）
+    # 仅对于实时视频流进行优化，静态图像保持原样
+    frame_height, frame_width = frame.shape[:2]
+    scaled_frame = frame
+    scale_factor = 1.0
+    
+    # 对于高分辨率图像，进行缩放处理
+    if frame_width > 640 and frame_count > 1:  # frame_count > 1 表示是视频流
+        scale_factor = 640 / frame_width
+        scaled_width = 640
+        scaled_height = int(frame_height * scale_factor)
+        scaled_frame = cv2.resize(frame, (scaled_width, scaled_height))
+    
+    # 2. 确定是否执行完整识别
+    # 优化策略：静态图像执行完整识别，视频流每5帧执行一次
+    do_full_recognition = False
+    
+    if frame_count <= 1:  # 静态图像
+        do_full_recognition = True
+    elif frame_count - state['last_full_recognition_frame'] >= 5:  # 每5帧执行一次
+        do_full_recognition = True
+        state['last_full_recognition_frame'] = frame_count
+    
     # --- 性能诊断：步骤1 ---
     t0 = time.time()
-    # 使用 YOLOv8 进行人脸检测
-    # 修复：对于可能为静态图的场景，使用 .predict() 而不是 .track()
-    face_results = face_model_local.predict(frame, verbose=False)
-    t1 = time.time()
     
-    # 从结果中提取边界框
-    boxes = [box.xyxy[0].tolist() for box in face_results[0].boxes] # 获取所有检测框
+    # 3. 执行人脸检测
+    face_results = face_model_local.predict(scaled_frame, verbose=False)
+    boxes = [box.xyxy[0].tolist() for box in face_results[0].boxes]  # 获取所有检测框
     
     # 如果没有检测到人脸，清空陌生人跟踪记录并直接返回
     if not boxes:
         unknown_faces_tracking = {}
         return
-        
-    # --- 性能诊断：步骤2 ---
-    t2 = time.time()
-    # 将边界框传递给 Dlib 服务进行识别
-    recognized_faces = dlib_face_service.identify_faces(frame, boxes)
-    t3 = time.time()
-
-    # --- 打印诊断日志 ---
-    print(f"DIAGNOSTICS - YOLO Detection: {t1-t0:.4f}s, Dlib Recognition: {t3-t2:.4f}s")
     
+    t1 = time.time()
+    
+    # 4. 将缩放坐标转回原始坐标
+    if scale_factor != 1.0:
+        boxes = [[b[0]/scale_factor, b[1]/scale_factor, 
+                 b[2]/scale_factor, b[3]/scale_factor] for b in boxes]
+    
+    # 5. 根据策略决定是完整识别还是使用缓存
+    recognized_faces = []
+    
+    if do_full_recognition:
+        # --- 性能诊断：步骤2 ---
+        t2 = time.time()
+        
+        # 执行完整的人脸识别
+        recognized_faces = dlib_face_service.identify_faces(frame, boxes)
+        
+        # 更新缓存
+        for name, box in recognized_faces:
+            box_key = f"{int(box[0])},{int(box[1])},{int(box[2])},{int(box[3])}"
+            state['recognized_faces'][box_key] = name
+            
+        t3 = time.time()
+        # --- 打印诊断日志 ---
+        print(f"DIAGNOSTICS - YOLO Detection: {t1-t0:.4f}s, Dlib Recognition: {t3-t2:.4f}s")
+    else:
+        # 使用缓存结果+框位置匹配
+        for box in boxes:
+            # 找到最接近的缓存框
+            closest_match = None
+            min_distance = float('inf')
+            
+            for cached_box_str, cached_name in state['recognized_faces'].items():
+                cached_coords = [int(c) for c in cached_box_str.split(',')]
+                
+                # 计算框中心点距离
+                current_center = ((box[0] + box[2])/2, (box[1] + box[3])/2)
+                cached_center = ((cached_coords[0] + cached_coords[2])/2, 
+                                (cached_coords[1] + cached_coords[3])/2)
+                
+                distance = ((current_center[0] - cached_center[0])**2 + 
+                           (current_center[1] - cached_center[1])**2)**0.5
+                
+                if distance < min_distance and distance < 50:  # 50像素阈值
+                    min_distance = distance
+                    closest_match = cached_name
+            
+            if closest_match:
+                recognized_faces.append((closest_match, box))
+            else:
+                recognized_faces.append(("Unknown", box))
+    
+    # 6. 在帧上绘制结果
     # 当前时间
     current_time = time.time()
     
@@ -872,23 +951,42 @@ def process_faces_only(frame, frame_count, state):
                     # 标记为已告警
                     unknown_faces_tracking[face_id]['alerted'] = True
                 
+        # 减少绘图操作：对小人脸使用更细的线条
+        face_size = max(right - left, bottom - top)
+        thickness = 2 if face_size > 100 else 1
+                
         # 绘制边界框
-        cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
+        cv2.rectangle(frame, (left, top), (right, bottom), color, thickness)
         
         # 准备绘制名字的文本
         label = f"{name}"
         
-        (label_width, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        # 对小人脸使用更小的字体
+        font_scale = 0.6 if face_size > 100 else 0.4
         
-        # --- 智能定位标签位置 ---
-        label_bg_height = 20 # 标签背景的高度
-        
-        # 判断标签应该放在框内还是框外
-        if top - label_bg_height < 5: # 增加一个5像素的边距
-            # 空间不足，放在内部
-            cv2.rectangle(frame, (left, top), (left + label_width + 4, top + label_bg_height), color, -1)
-            cv2.putText(frame, label, (left + 2, top + label_bg_height - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        # 只对中大型人脸绘制标签背景框
+        if face_size > 50:
+            (label_width, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+            
+            # --- 智能定位标签位置 ---
+            label_bg_height = 20 if face_size > 100 else 15  # 标签背景的高度
+            
+            # 判断标签应该放在框内还是框外
+            if top - label_bg_height < 5:  # 增加一个5像素的边距
+                # 空间不足，放在内部
+                cv2.rectangle(frame, (left, top), (left + label_width + 4, top + label_bg_height), color, -1)
+                cv2.putText(frame, label, (left + 2, top + label_bg_height - 5), 
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
+            else:
+                # 空间充足，放在外部
+                cv2.rectangle(frame, (left, top - label_bg_height), (left + label_width + 4, top), color, -1)
+                cv2.putText(frame, label, (left + 2, top - 5), 
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
         else:
+            # 对于极小人脸，只在上方显示简单文字，不加背景
+            cv2.putText(frame, label, (left, top - 5), 
+                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
+
             # 空间充足，放在外部
             cv2.rectangle(frame, (left, top - label_bg_height), (left + label_width + 4, top), color, -1)
             cv2.putText(frame, label, (left + 2, top - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)

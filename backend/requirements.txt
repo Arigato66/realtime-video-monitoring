@@ -1,0 +1,11 @@
+flask==2.0.1
+flask-socketio==5.1.1
+opencv-python==4.5.3.56
+numpy==1.21.2
+dlib==19.22.1
+imutils==0.5.4
+scipy==1.7.1
+python-engineio==4.2.1
+python-socketio==5.4.0
+eventlet==0.33.0
+werkzeug==2.0.1 

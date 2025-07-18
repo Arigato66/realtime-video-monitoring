@@ -113,6 +113,18 @@
               </div>
             </div>
             
+            <div class="control-panel">
+              <h2>控制面板</h2>
+              
+              <!-- 视频源选择 -->
+              <div class="control-section">
+                <h3>视频源</h3>
+                <div class="button-group">
+                  <button @click="connectWebcam" 
+                          :class="{ active: activeSource === 'webcam' }" 
+                          :disabled="detectionMode === 'face_anti_spoofing'">开启摄像头</button>
+                  <button @click="disconnectWebcam" v-if="activeSource === 'webcam'" class="disconnect-button">关闭摄像头</button>
+                  <button @click="uploadVideoFile" :disabled="activeSource === 'webcam'">上传视频</button>
             <!-- 上传文件 (视频) -->
             <div v-else-if="activeSource === 'upload' && isVideoUrl(videoSource)" key="upload-video" class="video-frame">
               <video :src="videoSource" controls autoplay class="webcam-feed"></video>
@@ -157,7 +169,43 @@
                     <span>上传文件</span>
                   </button>
                 </div>
+                <!-- 活体检测按钮单独一行 -->
+                <div class="button-group liveness-button-group">
+                  <button 
+                    @click="toggleFaceAntiSpoofing" 
+                    
+                    :class="{ active: detectionMode === 'face_anti_spoofing', 'liveness-button': true }"
+                    data-mode="face_anti_spoofing">
+                    活体检测
+                  </button>
+                </div>
               </div>
+               <!-- 在检测模式和危险区域设置之间插入 -->
+              <div class="control-section">
+                <div class="scream-status-bar">
+                  <span>尖叫声检测状态：{{ screamStatus }}</span>
+                  <button v-if="!screamDetecting" @click="startScreamDetection">开启尖叫声检测</button>
+                  <button v-else @click="stopScreamDetection">关闭尖叫声检测</button>
+                  <div class="scream-volume-bar">
+                    <div class="scream-volume-inner" :style="{width: (screamVolume*100).toFixed(0)+'%', background: screamVolume > 0.5 ? '#f44336' : screamVolume > 0.2 ? '#ffc107' : '#4caf50'}"></div>
+                  </div>
+                </div>
+              </div>
+              <!-- 危险区域编辑 -->
+              <div class="control-section">
+                <h3>危险区域设置</h3>
+                <div class="button-group">
+                  <button @click="toggleEditMode" :class="{ active: editMode }">
+                    {{ editMode ? '保存区域' : '编辑区域' }}
+                  </button>
+                  <button v-if="editMode" @click="cancelEdit">取消编辑</button>
+                </div>
+                <div v-if="editMode" class="edit-instructions">
+                  <p>点击并拖动区域点以调整位置</p>
+                  <p>右键点击删除点</p>
+                  <p>双击添加新点</p>
+                </div>
+
             </div>
           </transition>
         </div>
@@ -551,6 +599,48 @@ const editMode = ref(false)
 const alerts = ref([])
 const safetyDistance = ref(100)
 const loiteringThreshold = ref(2.0)
+const detectionMode = ref('object_detection') // 新增：检测模式状态
+const originalDangerZone = ref(null)
+// const fileInput = ref(null) // No longer needed
+const faceFileInput = ref(null) // 用于人脸注册的文件输入
+const registeredUsers = ref([]) // 已注册用户列表
+const pollingIntervalId = ref(null) // 用于轮询的定时器ID
+const videoTaskId = ref(''); // 保存当前视频处理任务的ID
+const webcamImg = ref(null);
+const screamStatus = ref('未开启');
+const screamDetecting = ref(false);
+let screamSocket = null;
+const screamVolume = ref(0);
+
+function startScreamDetection() {
+  if (screamSocket) return;
+  screamSocket = io(`${SERVER_ROOT_URL}/api/scream_ws`);
+  screamSocket.on('connect', () => {
+    screamSocket.emit('scream_detect', { action: 'start' });
+    screamStatus.value = '正在监听...';
+    screamDetecting.value = true;
+  });
+  screamSocket.on('scream_status', (data) => {
+    if (data.volume !== undefined) screamVolume.value = data.volume;
+    if (data.status === 'scream') {
+      screamStatus.value = '🚨 检测到尖叫声！';
+    } else if (data.status === 'normal') {
+      screamStatus.value = '✅ 无尖叫';
+    } else if (data.status === 'listening') {
+      screamStatus.value = '正在监听...';
+    } else if (data.status === 'stopped') {
+      screamStatus.value = '已停止';
+      screamDetecting.value = false;
+    }
+  });
+  screamSocket.on('scream_alert', (data) => {
+    alerts.value.unshift(data.alert);
+  });
+  screamSocket.on('disconnect', () => {
+    screamStatus.value = '已断开';
+    screamDetecting.value = false;
+    screamSocket = null;
+  });
 const detectionMode = ref('object_detection')
 const originalDangerZone = ref([])
 const registeredUsers = ref([])
@@ -640,6 +730,15 @@ const stopStream = (stream) => {
   }
 }
 
+function stopScreamDetection() {
+  if (screamSocket) {
+    screamSocket.emit('scream_detect', { action: 'stop' });
+    screamSocket.disconnect();
+    screamSocket = null;
+    screamStatus.value = '已停止';
+    screamDetecting.value = false;
+  }
+}
 // --- API 调用封装 ---
 // 使用新的 DLIB_API_BASE_URL
 const dlibApiFetch = async (endpoint, options = {}) => {
@@ -672,6 +771,18 @@ const apiFetch = async (endpoint, options = {}) => {
   }
 };
 
+// --- 检查人脸识别按钮状态的函数 ---
+const checkFaceRecognitionStatus = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/face_recognition_status`);
+    const data = await response.json();
+    return data.enabled;
+  } catch (error) {
+    console.error("获取人脸识别状态失败:", error);
+    return false;
+  }
+};
+
 // --- 检测模式管理 ---
 const loadDetectionMode = async () => {
   try {
@@ -683,7 +794,20 @@ const loadDetectionMode = async () => {
   }
 }
 
+// 在setDetectionMode函数中添加活体检测的处理
 const setDetectionMode = async (mode) => {
+  if (detectionMode.value === mode) return; // 如果模式未变，则不执行任何操作
+  
+  // 如果是人脸识别模式，先检查是否启用
+  if (mode === 'face_only') {
+    const enabled = await checkFaceRecognitionStatus();
+    if (!enabled) {
+      alert('请先通过活体检测后才能使用人脸识别功能');
+      return;
+    }
+  }
+  
+
   if (detectionMode.value === mode) return
   try {
     const data = await apiFetch('/detection_mode', {
@@ -698,6 +822,18 @@ const setDetectionMode = async (mode) => {
       'face_only': '人脸识别',
       'fall_detection': '跌倒检测',
       'smoking_detection': '抽烟检测',
+      'violence_detection': '暴力检测',
+      'face_anti_spoofing': '活体检测'
+    };
+    alert(`检测模式已切换为: ${modeNames[mode] || mode}`);
+
+    // 如果是活体检测模式，启动活体检测服务
+    if (mode === 'face_anti_spoofing') {
+      startFaceAntiSpoofing();
+    }
+
+    console.log(data.message);
+
       'violence_detection': '暴力检测'
     }
     alert(`检测模式已切换为: ${modeNames[mode] || mode}`)
@@ -706,6 +842,46 @@ const setDetectionMode = async (mode) => {
     // Error handled by apiFetch
   }
 }
+
+// 添加启动活体检测的函数
+const startFaceAntiSpoofing = async () => {
+  try {
+    // 禁用按钮，防止重复点击
+    const faceAntiSpoofingButton = document.querySelector('button[data-mode="face_anti_spoofing"]');
+    if (faceAntiSpoofingButton) {
+      faceAntiSpoofingButton.disabled = true;
+      setTimeout(() => {
+        faceAntiSpoofingButton.disabled = false;
+      }, 3000); // 3秒后恢复按钮
+    }
+    
+    const data = await apiFetch('/start_face_anti_spoofing', {
+      method: 'POST'
+    });
+    
+    if (data.status === 'warning') {
+      console.log(data.message);
+      alert('活体检测已经在运行中，请勿重复启动');
+    } else {
+      console.log(data.message);
+    }
+  } catch (error) {
+    // apiFetch中已处理错误
+  }
+};
+
+// 新增：切换活体检测模式
+const toggleFaceAntiSpoofing = async () => {
+  if (detectionMode.value === 'face_anti_spoofing') {
+    // 如果当前是活体检测模式，切换回目标检测模式
+    await setDetectionMode('object_detection');
+  } else {
+    // 如果当前不是活体检测模式，切换到活体检测模式
+    await setDetectionMode('face_anti_spoofing');
+    // 启动活体检测
+    startFaceAntiSpoofing();
+  }
+};
 
 
 // --- 配置管理 ---
@@ -1608,6 +1784,14 @@ onUnmounted(() => {
     clearInterval(pollingIntervalId.value)
   }
   
+  // 停止所有正在运行的视频流
+  disconnectWebcam(); // 这个函数现在会处理摄像头关闭
+  closeRegistrationModal(true); // 组件卸载时确保清理, 并告知函数不要重启摄像头
+  if (screamSocket) {
+    screamSocket.disconnect();
+    screamSocket = null;
+  }
+
   disconnectWebcam();
   closeRegistrationModal(true);
   
@@ -3084,5 +3268,41 @@ onUnmounted(() => {
   .rtmp-controls button {
     width: 100%;
   }
+}
+scream-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  background: #222;
+  color: #fff;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: 1.1em;
+}
+.scream-status-bar button {
+  background: #007bff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 0.3rem 1rem;
+  cursor: pointer;
+}
+.scream-status-bar button:hover {
+  background: #0056b3;
+}
+.scream-volume-bar {
+  width: 120px;
+  height: 18px;
+  background: #444;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-left: 1.5rem;
+  display: flex;
+  align-items: center;
+}
+.scream-volume-inner {
+  height: 100%;
+  transition: width 0.1s, background 0.2s;
 }
 </style>

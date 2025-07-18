@@ -183,6 +183,12 @@ def detection_mode():
         in: body
         required: false
         schema:
+            type: object
+            properties:
+                mode:
+                    type: string
+                    enum: ['object_detection', 'face_only', 'fall_detection', 'smoking_detection', 'violence_detection', 'face_anti_spoofing']
+                    description: 要设置的新模式。
           type: object
           properties:
             mode:
@@ -198,10 +204,23 @@ def detection_mode():
     if request.method == "POST":
         data = request.json
         mode = data.get('mode')
-        if mode in ['object_detection', 'face_only', 'fall_detection', 'smoking_detection', 'violence_detection']:
+        if mode in ['object_detection', 'face_only', 'fall_detection', 'smoking_detection', 'violence_detection', 'face_anti_spoofing']:
             system_state.DETECTION_MODE = mode
             print(f"检测模式已切换为: {system_state.DETECTION_MODE}")
             return jsonify({"status": "success", "message": f"Detection mode set to {mode}"})
         return jsonify({"status": "error", "message": "Invalid mode"}), 400
     else:  # GET
         return jsonify({"mode": system_state.DETECTION_MODE}) 
+
+@config_bp.route("/face_recognition_status", methods=["GET"])
+def face_recognition_status():
+    """获取人脸识别按钮的启用状态
+    ---
+    tags:
+        - 配置管理
+    description: 获取当前人脸识别按钮是否启用
+    responses:
+        200:
+            description: 成功获取状态
+    """
+    return jsonify({"enabled": system_state.FACE_RECOGNITION_ENABLED}) 
