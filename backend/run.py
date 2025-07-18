@@ -150,4 +150,5 @@ def main(config, host, port, debug, init_db, show_config):
         sys.exit(1)
 
 if __name__ == '__main__':
+=======
     main()

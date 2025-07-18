@@ -1,1 +1,1 @@
-{"danger_zone": [[100, 700], [600, 700], [600, 800], [100, 800]], "safety_distance": 100, "loitering_threshold": 2.0}
+{"danger_zone": [[100, 700], [600, 700], [600, 800], [100, 800], [156, 402], [92, 379]], "safety_distance": 100, "loitering_threshold": 2.0}

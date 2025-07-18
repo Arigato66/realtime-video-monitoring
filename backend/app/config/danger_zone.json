@@ -1,0 +1,18 @@
+{
+    "danger_zone": [
+        [
+            578,
+            341
+        ],
+        [
+            619,
+            450
+        ],
+        [
+            579,
+            460
+        ]
+    ],
+    "safety_distance": 130,
+    "loitering_threshold": 0.5
+}

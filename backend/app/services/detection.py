@@ -2,11 +2,17 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import os
-from app.services.danger_zone import DANGER_ZONE, SAFETY_DISTANCE, LOITERING_THRESHOLD, TARGET_CLASSES
+# --- V4: 修正模块导入问题 ---
+from app.services import danger_zone as danger_zone_service
+from app.services.danger_zone import SAFETY_DISTANCE, LOITERING_THRESHOLD, TARGET_CLASSES
+# --- 结束 V4 ---
 from app.services.alerts import (
-    add_alert, update_loitering_time, reset_loitering_time, get_loitering_time,
+    add_alert_memory as add_alert, # 保留旧的内存告警作为兼容
+    create_alert, # 导入新的数据库告警函数
+    update_loitering_time, reset_loitering_time, get_loitering_time,
     update_detection_time, get_alerts, reset_alerts
 )
+from app.services.logger import log_info, log_warning, log_error  # 导入日志服务
 from app.utils.geometry import point_in_polygon, distance_to_polygon
 from app.services.dlib_service import dlib_face_service
 from app.services import system_state
@@ -15,6 +21,16 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from app.services import violenceDetect
 from .liveness_detection import LivenessDetector
+=======
+# --- 新增：导入config模块以访问其状态 ---
+from app.routes import config as config_state
+# --- 结束新增 ---
+
+
+# --- 快照保存路径 ---
+SNAPSHOTS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'uploads', 'snapshots')
+os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+
 
 # --- 模型管理 (使用相对路径) ---
 # 路径是相对于 backend/app/services/ 目录的
@@ -88,9 +104,13 @@ def process_image(filepath, uploads_dir):
     # 重置警报，以防上次调用的状态残留
     reset_alerts()
     
+    # 记录系统日志
+    log_info('detection', f'开始处理图片: {filepath}')
+    
     # 读取图片
     img = cv2.imread(filepath)
     if img is None:
+        log_error('detection', f'无法加载图片: {filepath}')
         return {"status": "error", "message": "Failed to load image"}, 500
     
     res_plotted = img.copy() # Start with a copy of the original image
@@ -126,7 +146,8 @@ def process_image(filepath, uploads_dir):
         res_plotted = detections[0].plot()
         
         # Draw danger zone overlay on the plotted results
-        danger_zone_pts = DANGER_ZONE.reshape((-1, 1, 2))
+        # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+        danger_zone_pts = np.array(danger_zone_service.DANGER_ZONE).reshape((-1, 1, 2))
         overlay = res_plotted.copy()
         cv2.fillPoly(overlay, [danger_zone_pts], (0, 0, 255))
         cv2.addWeighted(overlay, 0.4, res_plotted, 0.6, 0, res_plotted)
@@ -142,11 +163,39 @@ def process_image(filepath, uploads_dir):
     output_url = f"/api/files/{output_filename}"
     print(f"图像处理完成，输出URL: {output_url}")
     
+    # --- 修改: 确保告警同时保存到数据库中 ---
+    memory_alerts = get_alerts()  # 获取内存中的告警
+    db_alerts_data = []  # 用于存储数据库告警的字典数据
+    
+    # 将内存告警转换为数据库告警
+    for alert in memory_alerts:
+        # 创建数据库告警记录 - 使用try/except包装以避免应用上下文错误
+        try:
+            from app import create_app
+            app = create_app()
+            with app.app_context():
+                db_alert = create_alert(
+                    event_type=alert['event_type'],
+                    details=alert['details'],
+                    video_path=None,  # 图片处理没有视频
+                    frame_snapshot_path=alert['snapshot_path']
+                )
+                if db_alert:
+                    # 直接获取字典数据，避免会话分离问题
+                    db_alerts_data.append(db_alert.to_dict())
+        except Exception as e:
+            print(f"创建数据库告警失败: {e}")
+    
+    # 记录系统日志
+    log_info('detection', f'图片处理完成: {output_path}, 生成告警: {len(db_alerts_data)}')
+    
     return {
         "status": "success",
         "media_type": "image",
         "file_url": output_url,
-        "alerts": get_alerts()
+        "alerts": memory_alerts,  # 返回处理期间生成的内存告警
+        "db_alerts": db_alerts_data,  # 返回数据库告警的字典数据
+        "message": "Processing complete. Check alert center for persistent alerts."
     }
 
 def process_video(filepath, uploads_dir):
@@ -162,6 +211,9 @@ def process_video(filepath, uploads_dir):
     """
     # 重置警报
     reset_alerts()
+    
+    # 记录系统日志
+    log_info('detection', f'开始处理视频: {filepath}')
     
     # 创建输出视频路径
     output_filename = 'processed_' + os.path.basename(filepath)
@@ -227,6 +279,9 @@ def process_video(filepath, uploads_dir):
         # 计算时间差
         time_diff = update_detection_time()
         
+        # --- V5: 每次处理前都从文件重新加载最新的配置 ---
+        danger_zone_service.load_config()
+        
         # --- 检测模式处理 ---
         processed_frame = frame.copy() # 复制一份用于处理
 
@@ -235,21 +290,25 @@ def process_video(filepath, uploads_dir):
             # 执行目标追踪
             results = object_model_local.track(processed_frame, persist=True)
             
-            # --- 绘图顺序调整 ---
-            # 1. 首先，绘制危险区域的半透明叠加层作为背景
-            overlay = processed_frame.copy()
-            danger_zone_pts = DANGER_ZONE.reshape((-1, 1, 2))
-            cv2.fillPoly(overlay, [danger_zone_pts], (0, 0, 255))
-            cv2.addWeighted(overlay, 0.4, processed_frame, 0.6, 0, processed_frame)
-            cv2.polylines(processed_frame, [danger_zone_pts], True, (0, 0, 255), 3)
+            # --- V3 混合驱动：仅在非编辑模式下由后端绘制 ---
+            if not config_state.edit_mode:
+                # 1. 首先，绘制危险区域的半透明叠加层作为背景
+                overlay = processed_frame.copy()
+                # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+                danger_zone_pts = np.array(danger_zone_service.DANGER_ZONE).reshape((-1, 1, 2))
+                # 使用更醒目的颜色
+                cv2.fillPoly(overlay, [danger_zone_pts], (0, 255, 255)) # 黄色填充
+                cv2.addWeighted(overlay, 0.4, processed_frame, 0.6, 0, processed_frame)
+                cv2.polylines(processed_frame, [danger_zone_pts], True, (0, 255, 255), 3) # 黄色边框
             
-            # 在危险区域中添加文字
-            danger_zone_center = np.mean(DANGER_ZONE, axis=0, dtype=np.int32)
-            cv2.putText(processed_frame, "Danger Zone", 
-                        (danger_zone_center[0] - 60, danger_zone_center[1]),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+                # 在危险区域中添加文字
+                # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+                danger_zone_center = np.mean(danger_zone_service.DANGER_ZONE, axis=0, dtype=np.int32)
+                cv2.putText(processed_frame, "Danger Zone", 
+                            (danger_zone_center[0] - 60, danger_zone_center[1]),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
             
-            # 2. 然后，在已经有了危险区域的帧上，处理检测结果（绘制追踪框、标签等前景）
+            # 2. 然后，处理检测结果（绘制追踪框、标签等前景）
             process_object_detection_results(results, processed_frame, time_diff, frame_count)
         
         elif system_state.DETECTION_MODE == 'fall_detection':
@@ -297,11 +356,39 @@ def process_video(filepath, uploads_dir):
     output_url = f"/api/files/{output_filename}"
     print(f"视频处理完成，输出URL: {output_url}")
     
+    # --- 修改: 确保告警同时保存到数据库中，并关联视频路径 ---
+    memory_alerts = get_alerts()  # 获取内存中的告警
+    db_alerts_data = []  # 用于存储数据库告警的字典数据
+    
+    # 将内存告警转换为数据库告警
+    for alert in memory_alerts:
+        # 创建数据库告警记录，并关联视频路径 - 使用try/except包装以避免应用上下文错误
+        try:
+            from app import create_app
+            app = create_app()
+            with app.app_context():
+                db_alert = create_alert(
+                    event_type=alert['event_type'],
+                    details=alert['details'],
+                    video_path=output_url,  # 关联处理后的视频路径
+                    frame_snapshot_path=alert['snapshot_path']
+                )
+                if db_alert:
+                    # 直接获取字典数据，避免会话分离问题
+                    db_alerts_data.append(db_alert.to_dict())
+        except Exception as e:
+            print(f"创建数据库告警失败: {e}")
+    
+    # 记录系统日志
+    log_info('detection', f'视频处理完成: {output_path}, 生成告警: {len(db_alerts_data)}')
+    
     return {
         "status": "success",
         "media_type": "video",
         "file_url": output_url,
-        "alerts": get_alerts()
+        "alerts": memory_alerts,  # 返回处理期间生成的内存告警
+        "db_alerts": db_alerts_data,  # 返回数据库告警的字典数据
+        "message": "Processing complete. Check alert center for persistent alerts."
     }
 
 
@@ -338,7 +425,26 @@ def process_smoking_detection_hybrid(frame, person_results, face_results, smokin
 
                 smoking_results = smoking_model.predict(roi_crop, imgsz=640, verbose=False)
                 if len(smoking_results[0].boxes) > 0:
-                    add_alert("Smoking Detected (High-Confidence)")
+                    snapshot_path = save_snapshot(frame) # 保存快照
+                    
+                    # 同时添加内存告警和数据库告警
+                    add_alert("High-Confidence Smoking Detection in ROI", 
+                             event_type="smoking_detection", 
+                             details="高置信度吸烟检测行为", 
+                             snapshot_path=snapshot_path)
+                    
+                    # 创建数据库告警 - 使用try/except包装以避免应用上下文错误
+                    try:
+                        from app import create_app
+                        app = create_app()
+                        with app.app_context():
+                            create_alert(
+                                event_type="smoking_detection",
+                                details="高置信度吸烟检测行为",
+                                frame_snapshot_path=snapshot_path
+                            )
+                    except Exception as e:
+                        print(f"创建数据库告警失败: {e}")
                     for s_box in smoking_results[0].boxes:
                         s_xyxy = s_box.xyxy.cpu().numpy().astype(int)[0]
                         abs_x1, abs_y1 = s_xyxy[0] + roi_x1, s_xyxy[1] + roi_y1
@@ -361,7 +467,26 @@ def process_smoking_detection_hybrid(frame, person_results, face_results, smokin
 
         smoking_results = smoking_model.predict(upper_body_crop, imgsz=1024, verbose=False)
         if len(smoking_results[0].boxes) > 0:
-            add_alert("Smoking Detected (Low-Confidence/Distant)")
+            snapshot_path = save_snapshot(frame) # 保存快照
+            
+            # 同时添加内存告警和数据库告警
+            add_alert("Low-Confidence/Distant Smoking Detection in Upper Body",
+                     event_type="smoking_detection",
+                     details="低置信度/远距离吸烟检测行为",
+                     snapshot_path=snapshot_path)
+            
+            # 创建数据库告警 - 使用try/except包装以避免应用上下文错误
+            try:
+                from app import create_app
+                app = create_app()
+                with app.app_context():
+                    create_alert(
+                        event_type="smoking_detection",
+                        details="低置信度/远距离吸烟检测行为",
+                        frame_snapshot_path=snapshot_path
+                    )
+            except Exception as e:
+                print(f"创建数据库告警失败: {e}")
             for s_box in smoking_results[0].boxes:
                 s_xyxy = s_box.xyxy.cpu().numpy().astype(int)[0]
                 abs_x1, abs_y1 = s_xyxy[0] + px1, s_xyxy[1] + py1
@@ -377,6 +502,16 @@ def process_object_detection_results(results, frame, time_diff, frame_count):
     处理通用目标检测结果（危险区域、徘徊等）
     (这是您之前的 process_detection_results 函数，已重命名并保留)
     """
+    # --- V3 混合驱动：在编辑模式下，跳过所有危险区域的闯入/靠近检测逻辑 ---
+    if config_state.edit_mode:
+        # 仍然需要绘制检测框，所以我们只跳过危险区域的部分
+        if results and results[0].boxes is not None and hasattr(results[0].boxes, 'id') and results[0].boxes.id is not None:
+            boxes = results[0].boxes.cpu().numpy()
+            # 绘制YOLOv8的默认结果（框和ID）
+            frame[:] = results[0].plot()
+        return # 直接返回，不执行后续的危险区域判断
+    # --- 结束新增 ---
+
     # 如果有追踪结果，在画面上显示追踪ID和危险区域告警
     if hasattr(results[0], 'boxes') and hasattr(results[0].boxes, 'id') and results[0].boxes.id is not None:
         boxes = results[0].boxes.xyxy.cpu().numpy()
@@ -399,10 +534,12 @@ def process_object_detection_results(results, frame, time_diff, frame_count):
             foot_point = (int((x1 + x2) / 2), int(y2))
             
             # 检查是否在危险区域内
-            in_danger_zone = point_in_polygon(foot_point, DANGER_ZONE)
+            # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+            in_danger_zone = point_in_polygon(foot_point, danger_zone_service.DANGER_ZONE)
             
             # 计算到危险区域的距离
-            distance = distance_to_polygon(foot_point, DANGER_ZONE)
+            # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+            distance = distance_to_polygon(foot_point, danger_zone_service.DANGER_ZONE)
             
             # 确定标签颜色和告警状态
             label_color = (0, 255, 0)  # 默认绿色
@@ -417,7 +554,26 @@ def process_object_detection_results(results, frame, time_diff, frame_count):
                     # 使用纯红色
                     label_color = (0, 0, 255)  # BGR格式：红色
                     alert_status = f"ID:{id} ({display_name}) staying in danger zone for {loitering_time:.1f}s"
-                    add_alert(alert_status)
+                    snapshot_path = save_snapshot(frame) # 保存快照
+                    
+                    # 同时添加内存告警和数据库告警
+                    add_alert(alert_status,
+                             event_type="danger_zone_intrusion",
+                             details=f"人员 {display_name} 在危险区域停留 {loitering_time:.1f} 秒",
+                             snapshot_path=snapshot_path)
+                    
+                    # 创建数据库告警 - 使用try/except包装以避免应用上下文错误
+                    try:
+                        from app import create_app
+                        app = create_app()
+                        with app.app_context():
+                            create_alert(
+                                event_type="danger_zone_intrusion",
+                                details=f"人员 {display_name} 在危险区域停留 {loitering_time:.1f} 秒",
+                                frame_snapshot_path=snapshot_path
+                            )
+                    except Exception as e:
+                        print(f"创建数据库告警失败: {e}")
                 else:
                     # 根据停留时间从橙色到红色渐变
                     ratio = min(1.0, loitering_time / LOITERING_THRESHOLD)
@@ -435,7 +591,26 @@ def process_object_detection_results(results, frame, time_diff, frame_count):
                     label_color = (0, 255, int(255 * (1 - ratio)))
                     
                     alert_status = f"ID:{id} ({display_name}) too close to danger zone ({distance:.1f}px)"
-                    add_alert(alert_status)
+                    snapshot_path = save_snapshot(frame) # 保存快照
+                    
+                    # 同时添加内存告警和数据库告警
+                    add_alert(alert_status,
+                             event_type="proximity_warning",
+                             details=f"人员 {display_name} 过于接近危险区域，距离 {distance:.1f} 像素",
+                             snapshot_path=snapshot_path)
+                    
+                    # 创建数据库告警 - 使用try/except包装以避免应用上下文错误
+                    try:
+                        from app import create_app
+                        app = create_app()
+                        with app.app_context():
+                            create_alert(
+                                event_type="proximity_warning",
+                                details=f"人员 {display_name} 过于接近危险区域，距离 {distance:.1f} 像素",
+                                frame_snapshot_path=snapshot_path
+                            )
+                    except Exception as e:
+                        print(f"创建数据库告警失败: {e}")
             
             # 在每个目标上方显示ID和类别
             label = f"ID:{id} {display_name}"
@@ -548,7 +723,26 @@ def process_pose_estimation_results(results, frame, time_diff, frame_count):
                                 # 角度小于45度，意味着身体更趋向于水平
                                 if angle < 45: 
                                     alert_message = f"警告: 人员 {person_id} 可能已跌倒!"
-                                    add_alert(alert_message) # 修正：只传递一个参数
+                                    snapshot_path = save_snapshot(frame) # 保存快照
+                                    
+                                    # 同时添加内存告警和数据库告警
+                                    add_alert(f"Fall Detected: Person ID {person_id} may have fallen.",
+                                             event_type="fall_detection",
+                                             details=f"检测到人员 {person_id} 可能跌倒，身体角度 {angle:.1f} 度",
+                                             snapshot_path=snapshot_path)
+                                    
+                                    # 创建数据库告警 - 使用try/except包装以避免应用上下文错误
+                                    try:
+                                        from app import create_app
+                                        app = create_app()
+                                        with app.app_context():
+                                            create_alert(
+                                                event_type="fall_detection",
+                                                details=f"检测到人员 {person_id} 可能跌倒，身体角度 {angle:.1f} 度",
+                                                frame_snapshot_path=snapshot_path
+                                            )
+                                    except Exception as e:
+                                        print(f"创建数据库告警失败: {e}")
                                     # 在人的边界框上方用红色字体标注
                                     cv2.putText(frame, f"FALL DETECTED: ID {person_id}", 
                                                 (int(box[0]), int(box[1] - 10)),
@@ -567,8 +761,12 @@ def process_pose_estimation_results(results, frame, time_diff, frame_count):
 # 为了保持兼容，我们将旧的函数重命名
 process_detection_results = process_object_detection_results
 
-
 # --- 新的、带结果黏滞和多线程优化的高频人脸识别逻辑 ---
+
+# 添加陌生人跟踪字典，用于记录陌生人出现的时间
+unknown_faces_tracking = {}
+# 陌生人需要持续出现的时间阈值（秒）
+UNKNOWN_FACE_THRESHOLD = 3.0
 
 def process_faces_only(frame, frame_count, state):
     """
@@ -588,6 +786,9 @@ def process_faces_only(frame, frame_count, state):
         state['last_full_recognition_frame'] = 0
     
     # 获取本地人脸模型
+
+    global unknown_faces_tracking
+    
     face_model_local = state.get('face_model')
     if face_model_local is None:
         face_model_local = YOLO(FACE_MODEL_PATH)
@@ -623,8 +824,9 @@ def process_faces_only(frame, frame_count, state):
     face_results = face_model_local.predict(scaled_frame, verbose=False)
     boxes = [box.xyxy[0].tolist() for box in face_results[0].boxes]  # 获取所有检测框
     
-    # 如果没有检测到人脸，直接返回
+    # 如果没有检测到人脸，清空陌生人跟踪记录并直接返回
     if not boxes:
+        unknown_faces_tracking = {}
         return
     
     t1 = time.time()
@@ -680,10 +882,74 @@ def process_faces_only(frame, frame_count, state):
                 recognized_faces.append(("Unknown", box))
     
     # 6. 在帧上绘制结果
+    # 当前时间
+    current_time = time.time()
+    
+    # 创建当前帧检测到的陌生人列表，用于更新跟踪状态
+    current_unknown_faces = []
+    
+    # 3. 在帧上绘制结果
     for name, box in recognized_faces:
         # 双重保险：再次确保坐标是整数
         left, top, right, bottom = [int(p) for p in box]
         color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
+        
+        # 如果是陌生人，记录其位置和时间
+        if name == "Unknown":
+            # 创建一个唯一标识符，基于人脸位置
+            face_id = f"unknown_{left}_{top}_{right}_{bottom}"
+            current_unknown_faces.append(face_id)
+            
+            # 如果是新出现的陌生人，记录初次出现时间
+            if face_id not in unknown_faces_tracking:
+                unknown_faces_tracking[face_id] = {
+                    'first_seen': current_time,
+                    'last_seen': current_time,
+                    'box': box,
+                    'alerted': False  # 是否已经触发过告警
+                }
+            else:
+                # 更新最后一次看到的时间
+                unknown_faces_tracking[face_id]['last_seen'] = current_time
+                unknown_faces_tracking[face_id]['box'] = box
+                
+                # 检查是否持续出现超过阈值时间
+                duration = current_time - unknown_faces_tracking[face_id]['first_seen']
+                
+                # 在图像上显示持续时间
+                duration_text = f"{duration:.1f}s"
+                cv2.putText(frame, duration_text, (left, top - 25), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                
+                # 如果持续时间超过阈值且尚未触发告警，则触发告警
+                if duration >= UNKNOWN_FACE_THRESHOLD and not unknown_faces_tracking[face_id]['alerted']:
+                    # 触发告警
+                    alert_message = f"检测到陌生人持续出现{UNKNOWN_FACE_THRESHOLD}秒以上"
+                    
+                    # 保存快照
+                    snapshot_path = save_snapshot(frame)
+                    
+                    # 添加内存告警
+                    add_alert(alert_message, 
+                             event_type="stranger_detection", 
+                             details=f"陌生人在位置({left},{top},{right},{bottom})持续出现{duration:.1f}秒",
+                             snapshot_path=snapshot_path)
+                    
+                    # 创建数据库告警 - 使用try/except包装以避免应用上下文错误
+                    try:
+                        from app import create_app
+                        app = create_app()
+                        with app.app_context():
+                            create_alert(
+                                event_type="stranger_detection",
+                                details=f"陌生人在位置({left},{top},{right},{bottom})持续出现{duration:.1f}秒",
+                                frame_snapshot_path=snapshot_path
+                            )
+                    except Exception as e:
+                        print(f"创建数据库告警失败: {e}")
+                    
+                    # 标记为已告警
+                    unknown_faces_tracking[face_id]['alerted'] = True
                 
         # 减少绘图操作：对小人脸使用更细的线条
         face_size = max(right - left, bottom - top)
@@ -720,6 +986,20 @@ def process_faces_only(frame, frame_count, state):
             # 对于极小人脸，只在上方显示简单文字，不加背景
             cv2.putText(frame, label, (left, top - 5), 
                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
+
+            # 空间充足，放在外部
+            cv2.rectangle(frame, (left, top - label_bg_height), (left + label_width + 4, top), color, -1)
+            cv2.putText(frame, label, (left + 2, top - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    
+    # 清理不再出现的陌生人记录（超过5秒未见）
+    faces_to_remove = []
+    for face_id in unknown_faces_tracking:
+        if face_id not in current_unknown_faces:
+            if current_time - unknown_faces_tracking[face_id]['last_seen'] > 5.0:
+                faces_to_remove.append(face_id)
+    
+    for face_id in faces_to_remove:
+        del unknown_faces_tracking[face_id]
     
     # 不再返回 frame，因为是直接在原图上修改
     # return frame
@@ -737,9 +1017,10 @@ def draw_distance_line(frame, foot_point, distance):
     # 找到危险区域上最近的点
     min_dist = float('inf')
     closest_point = None
-    for i in range(len(DANGER_ZONE)):
-        p1 = DANGER_ZONE[i]
-        p2 = DANGER_ZONE[(i + 1) % len(DANGER_ZONE)]
+    # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+    for i in range(len(danger_zone_service.DANGER_ZONE)):
+        p1 = danger_zone_service.DANGER_ZONE[i]
+        p2 = danger_zone_service.DANGER_ZONE[(i + 1) % len(danger_zone_service.DANGER_ZONE)]
         
         # 计算点到线段的最近点
         line_vec = p2 - p1
@@ -816,8 +1097,44 @@ def process_violence_detection(filepath, uploads_dir):
     alerts = []
     if violence_prob > 0.7:
         alerts.append("warning: 检测到高概率暴力行为!")
+        
+        # 同时添加内存告警和数据库告警
+        add_alert(f"High probability ({violence_prob:.2f}) of violence detected.",
+                 event_type="violence_detection",
+                 details=f"检测到高概率暴力行为，置信度 {violence_prob:.2f}")
+        
+        # 创建数据库告警，关联视频路径 - 使用try/except包装以避免应用上下文错误
+        try:
+            from app import create_app
+            app = create_app()
+            with app.app_context():
+                create_alert(
+                    event_type="violence_detection",
+                    details=f"检测到高概率暴力行为，置信度 {violence_prob:.2f}",
+                    video_path=output_url
+                )
+        except Exception as e:
+            print(f"创建数据库告警失败: {e}")
     elif violence_prob > 0.5:
         alerts.append("caution: 检测到可能的暴力行为")
+        
+        # 同时添加内存告警和数据库告警
+        add_alert(f"Possible violence detected ({violence_prob:.2f}).",
+                 event_type="violence_detection", 
+                 details=f"检测到可能的暴力行为，置信度 {violence_prob:.2f}")
+        
+        # 创建数据库告警，关联视频路径 - 使用try/except包装以避免应用上下文错误
+        try:
+            from app import create_app
+            app = create_app()
+            with app.app_context():
+                create_alert(
+                    event_type="violence_detection",
+                    details=f"检测到可能的暴力行为，置信度 {violence_prob:.2f}",
+                    video_path=output_url
+                )
+        except Exception as e:
+            print(f"创建数据库告警失败: {e}")
     else:
         alerts.append("safe: 未检测到明显暴力行为")
 
@@ -829,3 +1146,39 @@ def process_violence_detection(filepath, uploads_dir):
         "violenceProbability": float(violence_prob),
         "nonViolenceProbability": float(non_violence_prob)
     } 
+
+def save_snapshot(frame):
+    """保存当前帧的快照并返回相对路径"""
+    timestamp = int(time.time() * 1000)
+    filename = f"snapshot_{timestamp}.jpg"
+    
+    # 确保快照目录存在
+    os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+    
+    filepath = os.path.join(SNAPSHOTS_DIR, filename)
+    
+    try:
+        cv2.imwrite(filepath, frame)
+        # 记录系统日志
+        log_info('detection', f'保存告警快照: {filename}')
+        
+        # 确保快照可以通过API访问
+        # 创建一个硬链接到uploads目录
+        uploads_snapshots_dir = os.path.join(os.path.dirname(SNAPSHOTS_DIR), 'uploads', 'snapshots')
+        os.makedirs(uploads_snapshots_dir, exist_ok=True)
+        
+        uploads_filepath = os.path.join(uploads_snapshots_dir, filename)
+        # 如果目标文件已存在，先删除
+        if os.path.exists(uploads_filepath):
+            os.remove(uploads_filepath)
+            
+        # 复制文件
+        import shutil
+        shutil.copy2(filepath, uploads_filepath)
+        
+        # 返回可供前端访问的相对URL
+        return f"/api/files/snapshots/{filename}"
+    except Exception as e:
+        log_error('detection', f'快照保存失败: {str(e)}')
+        print(f"快照保存失败: {e}")
+        return None

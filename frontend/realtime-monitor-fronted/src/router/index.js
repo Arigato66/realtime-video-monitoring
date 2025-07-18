@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import LogsView from '../views/LogsView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -16,11 +17,6 @@ const router = createRouter({
       path: '/about',
       name: 'about',
       component: () => import('../views/AboutView.vue')
-    },
-    {
-      path: '/face',
-      name: 'face',
-      component: () => import('../views/FaceView.vue')
     },
     {
       path: '/monitor',
@@ -46,9 +42,10 @@ const router = createRouter({
       component: () => import('../views/AlertView.vue')
     },
     {
-      path: '/device',
-      name: 'device',
-      component: () => import('../views/DeviceView.vue')
+      path: '/logs',
+      name: 'logs',
+      component: LogsView,
+      meta: { requiresAuth: true }
     },
   ]
 })

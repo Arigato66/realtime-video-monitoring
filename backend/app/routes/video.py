@@ -1,203 +1,143 @@
 import os
+import cv2
 import uuid
-import threading
-from flask import Blueprint, request, jsonify, send_from_directory, current_app
+import json
+from flask import Blueprint, request, jsonify, Response, send_from_directory, current_app
 from werkzeug.utils import secure_filename
-
-from app.services.detection import process_image, process_video
 from app.services.video import video_feed, stop_video_feed_service
-from app.services.alerts import reset_alerts
+from app.services.detection import process_image, process_video
+from app.services.logger import log_info, log_error
 
-# 创建视频蓝图
-video_bp = Blueprint('video', __name__, url_prefix='/api')
+video_bp = Blueprint('video_bp', __name__, url_prefix='/api')
 
-# 用于管理异步任务的字典
-tasks = {}
-
-def run_video_processing(task_id, filepath, output_dir, app):
-    """一个包装函数，在后台线程中运行process_video并存储结果"""
-    try:
-        # 使用传入的app对象创建上下文
-        with app.app_context():
-            result = process_video(filepath, output_dir)
-            tasks[task_id] = {'status': 'completed', 'result': result}
-    except Exception as e:
-        print(f"视频处理任务 {task_id} 失败: {e}")
-        tasks[task_id] = {'status': 'error', 'result': {'status': 'error', 'message': str(e)}}
-
-# 定义上传目录路径
-UPLOADS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'uploads')
+# 确保上传目录存在
+UPLOADS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'uploads')
 os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+# 确保快照目录存在
+SNAPSHOTS_DIR = os.path.join(UPLOADS_DIR, 'snapshots')
+os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+
+# 允许的文件扩展名
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'mp4', 'avi', 'mov'}
+
+def allowed_file(filename):
+    """检查文件扩展名是否允许"""
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @video_bp.route('/video_feed')
 def get_video_feed():
-    """视频流端点
-    ---
-    tags:
-      - 视频处理
-    description: >
-      提供实时视频流。
-      此端点返回一个 multipart/x-mixed-replace 响应，用于视频流。
-      浏览器中的 `<img>` 标签可以直接使用此端点的URL作为 `src`。
-    produces:
-      - multipart/x-mixed-replace; boundary=frame
-    responses:
-      200:
-        description: 视频流正在传输.
-    """
+    """提供实时视频流"""
+    log_info('video', '开始视频流')
     return video_feed()
 
 @video_bp.route('/stop_video_feed', methods=['POST'])
 def stop_video_feed():
-    """停止摄像头视频流端点"""
-    if stop_video_feed_service():
-        return jsonify({"status": "success", "message": "Video feed stopped."})
-    else:
-        return jsonify({"status": "error", "message": "Failed to stop video feed."}), 500
+    """停止视频流"""
+    result = stop_video_feed_service()
+    log_info('video', '停止视频流')
+    return jsonify({"success": result})
 
 @video_bp.route('/upload', methods=['POST'])
 def upload_file():
-    """文件上传处理端点
+    """
+    处理文件上传
     ---
     tags:
       - 视频处理
     consumes:
       - multipart/form-data
     parameters:
-      - name: file
-        in: formData
+      - in: formData
+        name: file
         type: file
         required: true
-        description: 要上传的视频 (mp4) 或图片 (jpg) 文件.
+        description: 要上传的图片或视频文件
     responses:
       200:
-        description: 文件处理成功.
-        schema:
-          type: object
-          properties:
-            status:
-              type: string
-              example: success
-            media_type:
-              type: string
-              example: video
-            file_url:
-              type: string
-              description: 处理后可供访问的文件URL.
-              example: /api/files/processed_video.mp4
-            alerts:
-              type: array
-              items:
-                type: string
-              description: 处理过程中生成的警报列表.
+        description: 文件处理成功
       400:
-        description: 请求错误，例如没有文件、文件类型不支持等.
-    """
-    # 重置警报
-    reset_alerts()
-    
-    if 'file' not in request.files:
-        return jsonify({"status": "error", "message": "No file part"}), 400
-        
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({"status": "error", "message": "No selected file"}), 400
-        
-    if file:
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(UPLOADS_DIR, filename)
-        file.save(filepath)
-        
-        file_extension = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
-        
-        if file_extension == 'jpg':
-            # 处理图片上传
-            return jsonify(process_image(filepath, UPLOADS_DIR))
-        elif file_extension == 'mp4':
-            # --- 开始异步处理修改 ---
-            task_id = str(uuid.uuid4())
-            tasks[task_id] = {'status': 'processing', 'result': None}
-
-            # 获取当前的Flask app实例并传递给后台线程
-            app = current_app._get_current_object()
-            thread = threading.Thread(target=run_video_processing, args=(task_id, filepath, UPLOADS_DIR, app))
-            thread.start()
-
-            return jsonify({
-                "status": "processing",
-                "message": "视频处理已开始.",
-                "task_id": task_id,
-            }), 202
-            # --- 结束异步处理修改 ---
-        else:
-            return jsonify({
-                "status": "error", 
-                "message": "Unsupported file type. Please upload JPG or MP4."
-            }), 400
-
-@video_bp.route('/video/task_status/<task_id>', methods=['GET'])
-def get_task_status(task_id):
-    """获取视频处理任务的状态
-    ---
-    tags:
-      - 视频处理
-    parameters:
-      - name: task_id
-        in: path
-        type: string
-        required: true
-        description: 视频处理任务的ID.
-    responses:
-      202:
-        description: 任务仍在处理中.
-        schema:
-          type: object
-          properties:
-            status:
-              type: string
-              example: processing
-      200:
-        description: 任务成功完成.
-        schema:
-          type: object
-          properties:
-            status:
-              type: string
-              example: success
-            # ... 其他 process_video 返回的字段
+        description: 无效的请求或文件类型
       500:
-        description: 任务处理失败.
+        description: 服务器内部错误
     """
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({"status": "error", "message": "Task not found"}), 404
+    # 检查请求中是否有文件
+    if 'file' not in request.files:
+        log_error('video', '上传失败: 请求中没有文件')
+        return jsonify({"status": "error", "message": "No file part"}), 400
+    
+    file = request.files['file']
+    
+    # 检查文件名是否为空
+    if file.filename == '':
+        log_error('video', '上传失败: 未选择文件')
+        return jsonify({"status": "error", "message": "No selected file"}), 400
+    
+    # 检查文件类型是否允许
+    if not allowed_file(file.filename):
+        log_error('video', f'上传失败: 不支持的文件类型 ({file.filename})')
+        return jsonify({"status": "error", "message": "File type not allowed"}), 400
+    
+    # 安全地获取文件名并保存文件
+    filename = secure_filename(file.filename)
+    
+    # 添加随机前缀以避免文件名冲突
+    unique_filename = f"{uuid.uuid4().hex[:8]}_{filename}"
+    filepath = os.path.join(UPLOADS_DIR, unique_filename)
+    
+    try:
+        file.save(filepath)
+        log_info('video', f'文件上传成功: {unique_filename}')
+        
+        # 根据文件类型进行不同处理
+        file_ext = filename.rsplit('.', 1)[1].lower()
+        
+        if file_ext in {'png', 'jpg', 'jpeg'}:
+            # 处理图片
+            result = process_image(filepath, UPLOADS_DIR)
+            return jsonify(result)
+        elif file_ext in {'mp4', 'avi', 'mov'}:
+            # 处理视频
+            result = process_video(filepath, UPLOADS_DIR)
+            return jsonify(result)
+        else:
+            # 不应该到达这里，因为已经检查了文件类型
+            log_error('video', f'未知的文件类型: {file_ext}')
+            return jsonify({"status": "error", "message": "Unknown file type"}), 400
+            
+    except Exception as e:
+        log_error('video', f'处理上传文件时出错: {str(e)}')
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-    if task['status'] == 'completed':
-        return jsonify(task['result'])
-    elif task['status'] == 'error':
-        return jsonify(task['result']), 500
-    else:  # processing
-        return jsonify({"status": "processing"}), 202
-
-@video_bp.route('/files/<filename>')
+@video_bp.route('/files/<path:filename>')
 def serve_file(filename):
-    """文件访问端点
+    """
+    提供上传的文件
     ---
     tags:
-      - 视频处理
+      - 文件服务
     parameters:
       - name: filename
         in: path
         type: string
         required: true
-        description: 要访问的文件名 (通常是处理后的视频或图片).
+        description: 要提供的文件名
     responses:
       200:
-        description: 成功返回文件.
+        description: 文件内容
       404:
-        description: 文件未找到.
+        description: 文件未找到
     """
-    print(f"请求访问文件: {filename}, 目录: {UPLOADS_DIR}")
-    # 确保安全的文件名访问
-    filename = secure_filename(filename)
-    return send_from_directory(UPLOADS_DIR, filename) 
+    try:
+        # 处理快照路径
+        if filename.startswith('snapshots/'):
+            # 从snapshots子目录提供文件
+            snapshot_filename = filename.replace('snapshots/', '')
+            return send_from_directory(SNAPSHOTS_DIR, snapshot_filename)
+        else:
+            # 从主上传目录提供文件
+            return send_from_directory(UPLOADS_DIR, filename)
+    except Exception as e:
+        log_error('video', f'提供文件时出错: {str(e)}')
+        return jsonify({"status": "error", "message": str(e)}), 404 

@@ -13,6 +13,8 @@ def get_registered_faces():
     ---
     tags:
       - Dlib人脸管理
+    summary: 获取所有已注册人脸姓名
+    description: 获取所有已注册人脸姓名的列表。
     responses:
       200:
         description: 成功返回已注册的人脸姓名列表。
@@ -38,6 +40,8 @@ def delete_registered_face(name):
     ---
     tags:
       - Dlib人脸管理
+    summary: 删除已注册人脸
+    description: 按姓名删除已注册的人脸。
     parameters:
       - name: name
         in: path
@@ -47,8 +51,26 @@ def delete_registered_face(name):
     responses:
       200:
         description: 删除成功。
+        schema:
+          type: object
+          properties:
+            status:
+              type: string
+              example: success
+            message:
+              type: string
+              example: "'张三' 已被成功删除。"
       404:
         description: 未找到指定姓名的人脸。
+        schema:
+          type: object
+          properties:
+            status:
+              type: string
+              example: error
+            message:
+              type: string
+              example: "'张三' 未找到或无法删除。"
     """
     success = dlib_face_service.delete_face_by_name(name)
     if success:
@@ -87,31 +109,21 @@ def handle_frame_capture(data):
     """处理用于捕获的视频帧"""
     sid = request.sid
     session = registration_sessions.get(sid)
-    
     if not session or not session['capturing']:
         emit('error', {'message': '无效的会话或未开始注册。'})
         return
-
     name = session['name']
     image_data = data.get('image') # 接收 Base64 编码的图像数据
-
     if image_data:
         try:
             import base64
             import numpy as np
             import cv2
-
-            # 解码 Base64 图像
             img_bytes = base64.b64decode(image_data.split(',')[1])
             img_array = np.frombuffer(img_bytes, dtype=np.uint8)
             frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-
-            # 调用服务进行捕获
             result = dlib_face_service.register_face_capture(name, frame)
-            
-            # 将结果发回给客户端
             emit('capture_result', result)
-
         except Exception as e:
             logging.error(f"处理帧时出错: {e}")
             emit('error', {'message': f'处理帧时出错: {e}'})

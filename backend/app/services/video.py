@@ -12,6 +12,11 @@ from app.services.violenceDetect import load_model_safely, process_frame as viol
 from app.services.face_anti_spoofing_service import FaceAntiSpoofingService
 import tensorflow as tf
 from collections import deque
+# --- 新增：导入config模块以访问其状态 ---
+from app.routes import config as config_state
+# --- V4: 修正模块导入问题 ---
+from app.services import danger_zone as danger_zone_service
+import datetime
 
 # 全局变量，用于控制摄像头视频流的循环
 CAMERA_ACTIVE = False
@@ -96,6 +101,15 @@ def video_feed():
         nonlocal frame_count, prev_frame_time, new_frame_time, violence_model, vgg_model
         nonlocal image_model_transfer, violence_buffer, violence_status, violence_prob
         nonlocal violence_last_infer_frame, skip_frame_count, face_anti_spoofing_service
+
+        nonlocal frame_count, prev_frame_time, new_frame_time, violence_model, vgg_model, image_model_transfer, violence_buffer, violence_status, violence_prob, violence_last_infer_frame
+
+        # 视频录制相关变量
+        video_writer = None
+        record_duration = 10  # seconds
+        record_start_time = None
+        record_triggered = False
+        recorded_video_path = None
         
         try:
             while CAMERA_ACTIVE:
@@ -105,6 +119,10 @@ def video_feed():
                     
                 frame_count += 1
                 skip_frame_count += 1
+
+
+                # --- V5: 每次处理前都从文件重新加载最新的配置 ---
+                danger_zone_service.load_config()
                 
                 # --- 新增：FPS 计算 ---
                 new_frame_time = time.time()
@@ -241,12 +259,115 @@ def video_feed():
                 # 将处理后的帧编码为JPEG格式 - 使用较小的JPEG质量参数，减少带宽需求
                 encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 80]  # 质量设为80%，平衡质量和大小
                 (flag, encodedImage) = cv2.imencode(".jpg", processed_frame, encode_param)
+                processed_frame = frame # 将带有FPS文本的帧作为处理的基础
+
+                # 根据当前模式决定处理方式 (All modes now use session-local models)
+                if system_state.DETECTION_MODE == 'violence_detection':
+                    # 初始化模型和特征提取器
+                    if violence_model is None:
+                        import os
+                        model_path = os.path.join(os.path.dirname(__file__), 'vd.hdf5')
+                        violence_model = load_model_safely(model_path)
+                        try:
+                            vgg_model = tf.keras.applications.VGG16(include_top=True, weights='imagenet')
+                        except Exception:
+                            vgg_model = tf.keras.applications.VGG16(include_top=True, weights=None)
+                        transfer_layer = vgg_model.get_layer('fc2')
+                        image_model_transfer = tf.keras.models.Model(inputs=vgg_model.input, outputs=transfer_layer.output)
+                    # 处理帧并加入缓冲区
+                    violence_buffer.append(violence_process_frame(frame))
+                    # 每N帧推理一次
+                    if len(violence_buffer) == 20 and (frame_count - violence_last_infer_frame >= violence_infer_interval):
+                        violence_last_infer_frame = frame_count
+                        try:
+                            transfer_values = image_model_transfer.predict(np.array(violence_buffer), verbose=0)
+                            prediction = violence_model.predict(np.array([transfer_values]), verbose=0)
+                            violence_prob = float(prediction[0][0])
+                            # 状态判断
+                            if violence_prob <= 0.5:
+                                violence_status = "safe"
+                            elif violence_prob <= 0.7:
+                                violence_status = "caution"
+                                add_alert("caution: 检测到可能的暴力行为",
+                                         event_type="violence_detection",
+                                         details=f"检测到可能的暴力行为，置信度 {violence_prob:.2f}")
+                                record_triggered = True
+                            else:
+                                violence_status = "warning"
+                                add_alert("warning: 检测到高概率暴力行为!",
+                                         event_type="violence_detection", 
+                                         details=f"检测到高概率暴力行为，置信度 {violence_prob:.2f}")
+                                record_triggered = True
+                        except Exception as e:
+                            violence_status = "error"
+                            violence_prob = 0.0
+                            print(f"暴力检测推理异常: {e}")
+                    # 叠加状态到画面
+                    color = (0, 255, 0) if violence_status == "safe" else (0, 255, 255) if violence_status == "caution" else (0, 0, 255)
+                    cv2.putText(processed_frame, f"state: {violence_status}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                    cv2.putText(processed_frame, f"violenceProbability: {violence_prob:.4f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                
+                elif system_state.DETECTION_MODE == 'object_detection':
+                    # --- V3 混合驱动：在实时视频流中添加危险区域绘制 ---
+                    if not config_state.edit_mode:
+                        # 仅在非编辑模式下由后端绘制危险区域
+                        overlay = processed_frame.copy()
+                        # 确保DANGER_ZONE不为空
+                        # --- V4: 使用模块访问最新的 DANGER_ZONE ---
+                        if danger_zone_service.DANGER_ZONE is not None and len(danger_zone_service.DANGER_ZONE) > 0:
+                            danger_zone_pts = np.array(danger_zone_service.DANGER_ZONE, dtype=np.int32).reshape((-1, 1, 2))
+                            # 使用黄色进行绘制
+                            cv2.fillPoly(overlay, [danger_zone_pts], (0, 255, 255))
+                            cv2.addWeighted(overlay, 0.4, processed_frame, 0.6, 0, processed_frame)
+                            cv2.polylines(processed_frame, [danger_zone_pts], True, (0, 255, 255), 3)
+
+                    outputs = object_model_stream.track(processed_frame, persist=True)
+                    detection_service.process_object_detection_results(outputs, processed_frame, time_diff, frame_count)
+                
+                elif system_state.DETECTION_MODE == 'fall_detection':
+                    pose_results = pose_model_stream.track(processed_frame, persist=True)
+                    detection_service.process_pose_estimation_results(pose_results, processed_frame, time_diff, frame_count)
+
+                elif system_state.DETECTION_MODE == 'face_only':
+                    # 修复：恢复 state 参数的传递，这是必须的
+                    if 'face_model' not in face_recognition_cache:
+                        face_recognition_cache['face_model'] = face_model_stream
+                    detection_service.process_faces_only(processed_frame, frame_count, face_recognition_cache)
+                
+                elif system_state.DETECTION_MODE == 'smoking_detection':
+                    face_results = face_model_stream.predict(processed_frame, verbose=False)
+                    # --- 问题修复：移除 classes=[0] 限制，以允许检测所有类型的物体，并避免状态污染 ---
+                    person_results = object_model_stream.track(processed_frame, persist=True, verbose=False)
+                    detection_service.process_smoking_detection_hybrid(
+                        processed_frame, person_results, face_results, smoking_model_service
+                    )
+
+                # 将处理后的帧编码为JPEG格式
+                (flag, encodedImage) = cv2.imencode(".jpg", processed_frame)
                 if not flag:
                     continue
                     
                 # 以multipart格式产生输出帧
                 yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + 
                       bytearray(encodedImage) + b'\r\n')
+        
+                # 录制视频
+                if record_triggered and video_writer is None:
+                    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+                    video_filename = f'alert_video_{timestamp}.mp4'
+                    recorded_video_path = os.path.join('uploads', video_filename)
+                    os.makedirs('uploads', exist_ok=True)
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    video_writer = cv2.VideoWriter(recorded_video_path, fourcc, 20.0, (frame.shape[1], frame.shape[0]))
+                    record_start_time = time.time()
+                if video_writer is not None:
+                    video_writer.write(processed_frame)
+                    if time.time() - record_start_time > record_duration:
+                        video_writer.release()
+                        video_writer = None
+                        record_triggered = False
+                        # 这里需要将recorded_video_path保存到告警中，假设add_alert返回ID或使用全局
+                        print(f'Video recorded: {recorded_video_path}')
         
         except (GeneratorExit, ConnectionAbortedError):
             print("Client disconnected, cleaning up video stream resources...")
@@ -283,3 +404,5 @@ def stop_video_feed_service():
     CAMERA_ACTIVE = False
     print("Camera video stream has been requested to stop.")
     return True 
+    print("摄像头视频流已请求停止。")
+    return True

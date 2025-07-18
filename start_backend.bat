@@ -1,5 +1,21 @@
 @echo off
 echo 启动后端服务...
+
+cd /d "%~dp0\backend"
+
+REM 激活conda环境
+call conda activate video_monitor
+
+REM 启动Redis（如果需要）
+start "Redis" redis-server
+
+REM 启动Celery Worker
+start "Celery Worker" celery -A app.celery_app worker --loglevel=info --pool=solo
+
+REM 启动Flask应用
+python run.py
+
+pause
 echo ====================================
 
 :: 启动后端API服务
