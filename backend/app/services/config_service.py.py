@@ -20,8 +20,8 @@ class ConfigService:
     def set_detection_mode(cls, mode):
         """设置新的检测模式"""
         # 可以添加验证，确保模式是有效的
-        valid_modes = ['face_only', 'object_detection', 'fall_detection', 'smoking_detection']
+        valid_modes = ['face_only', 'object_detection', 'fall_detection', 'smoking_detection', 'violence_detection']
         if mode in valid_modes:
             cls._detection_mode = mode
             return True
-        return False 
+        return False

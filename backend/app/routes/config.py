@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, jsonify, request
 import numpy as np
 from flask_jwt_extended import jwt_required
 from app.services import system_state
@@ -21,6 +21,8 @@ def get_config():
     ---
     tags:
       - 配置管理
+    summary: 获取配置信息
+    description: 获取当前系统的危险区域、安全距离和停留阈值配置。
     responses:
       200:
         description: 返回当前系统配置.
@@ -54,6 +56,8 @@ def update_danger_zone():
     ---
     tags:
       - 配置管理
+    summary: 更新危险区域坐标
+    description: 更新危险区域的多边形顶点坐标。
     parameters:
       - name: body
         in: body
@@ -77,10 +81,8 @@ def update_danger_zone():
     global DANGER_ZONE
     data = request.json
     new_zone = data.get('danger_zone')
-    
     if new_zone and len(new_zone) >= 3:  # 确保至少有3个点形成多边形
         DANGER_ZONE = np.array(new_zone, np.int32)
-        # V5: 使用新的服务函数保存配置
         save_danger_zone(DANGER_ZONE)
         return jsonify({"status": "success", "message": "Danger zone updated and saved successfully"})
     else:
@@ -93,6 +95,8 @@ def update_thresholds():
     ---
     tags:
       - 配置管理
+    summary: 更新安全距离和停留时间阈值
+    description: 更新安全距离和停留时间的阈值。
     parameters:
       - name: body
         in: body
@@ -114,23 +118,18 @@ def update_thresholds():
     """
     global SAFETY_DISTANCE, LOITERING_THRESHOLD
     data = request.json
-    
     safety_distance = data.get('safety_distance')
     loitering_threshold = data.get('loitering_threshold')
-    
     if safety_distance is not None:
         try:
             SAFETY_DISTANCE = int(safety_distance)
         except ValueError:
             return jsonify({"status": "error", "message": "Invalid safety distance value"}), 400
-            
     if loitering_threshold is not None:
         try:
             LOITERING_THRESHOLD = float(loitering_threshold)
         except ValueError:
             return jsonify({"status": "error", "message": "Invalid loitering threshold value"}), 400
-    
-    # V5: 使用新的服务函数保存配置
     save_thresholds(SAFETY_DISTANCE, LOITERING_THRESHOLD)
     return jsonify({
         "status": "success", 
@@ -146,9 +145,8 @@ def toggle_edit_mode():
     ---
     tags:
       - 配置管理
-    description: >
-      开启或关闭危险区域的编辑模式。
-      开启后，实时视频流 (`/api/video_feed`) 可能会叠加可编辑的UI元素。
+    summary: 切换危险区域编辑模式
+    description: '开启或关闭危险区域的编辑模式。开启后，实时视频流 (`/api/video_feed`) 可能会叠加可编辑的UI元素。'
     parameters:
       - name: body
         in: body
@@ -182,26 +180,25 @@ def detection_mode():
     """获取或设置检测模式
     ---
     tags:
-        - 配置管理
-    description: >
-        GET: 获取当前的检测模式.
-        POST: 设置新的检测模式。
+      - 配置管理
+    summary: 获取或设置检测模式
+    description: 'GET: 获取当前的检测模式. POST: 设置新的检测模式。'
     parameters:
       - name: body
         in: body
         required: false
         schema:
-            type: object
-            properties:
-                mode:
-                    type: string
-                    enum: ['object_detection', 'face_only', 'fall_detection', 'smoking_detection']
-                    description: 要设置的新模式。
+          type: object
+          properties:
+            mode:
+              type: string
+              enum: ['object_detection', 'face_only', 'fall_detection', 'smoking_detection', 'violence_detection']
+              description: 要设置的新模式。
     responses:
-        200:
-            description: 成功获取或设置模式。
-        400:
-            description: 无效的模式值。
+      200:
+        description: 成功获取或设置模式。
+      400:
+        description: 无效的模式值。
     """
     if request.method == "POST":
         data = request.json

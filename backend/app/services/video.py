@@ -15,6 +15,7 @@ from collections import deque
 from app.routes import config as config_state
 # --- V4: 修正模块导入问题 ---
 from app.services import danger_zone as danger_zone_service
+import datetime
 
 # 全局变量，用于控制摄像头视频流的循环
 CAMERA_ACTIVE = False
@@ -64,6 +65,13 @@ def video_feed():
         nonlocal object_model_stream, face_model_stream, pose_model_stream
         nonlocal frame_count, prev_frame_time, new_frame_time, violence_model, vgg_model, image_model_transfer, violence_buffer, violence_status, violence_prob, violence_last_infer_frame
 
+        # 视频录制相关变量
+        video_writer = None
+        record_duration = 10  # seconds
+        record_start_time = None
+        record_triggered = False
+        recorded_video_path = None
+        
         try:
             while CAMERA_ACTIVE:
                 ret, frame = cap.read()
@@ -124,10 +132,16 @@ def video_feed():
                                 violence_status = "safe"
                             elif violence_prob <= 0.7:
                                 violence_status = "caution"
-                                add_alert("caution: 检测到可能的暴力行为")
+                                add_alert("caution: 检测到可能的暴力行为",
+                                         event_type="violence_detection",
+                                         details=f"检测到可能的暴力行为，置信度 {violence_prob:.2f}")
+                                record_triggered = True
                             else:
                                 violence_status = "warning"
-                                add_alert("warning: 检测到高概率暴力行为!")
+                                add_alert("warning: 检测到高概率暴力行为!",
+                                         event_type="violence_detection", 
+                                         details=f"检测到高概率暴力行为，置信度 {violence_prob:.2f}")
+                                record_triggered = True
                         except Exception as e:
                             violence_status = "error"
                             violence_prob = 0.0
@@ -166,7 +180,8 @@ def video_feed():
                 
                 elif system_state.DETECTION_MODE == 'smoking_detection':
                     face_results = face_model_stream.predict(processed_frame, verbose=False)
-                    person_results = object_model_stream.track(processed_frame, persist=True, classes=[0], verbose=False)
+                    # --- 问题修复：移除 classes=[0] 限制，以允许检测所有类型的物体，并避免状态污染 ---
+                    person_results = object_model_stream.track(processed_frame, persist=True, verbose=False)
                     detection_service.process_smoking_detection_hybrid(
                         processed_frame, person_results, face_results, smoking_model_service
                     )
@@ -179,6 +194,24 @@ def video_feed():
                 # 以multipart格式产生输出帧
                 yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + 
                       bytearray(encodedImage) + b'\r\n')
+        
+                # 录制视频
+                if record_triggered and video_writer is None:
+                    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+                    video_filename = f'alert_video_{timestamp}.mp4'
+                    recorded_video_path = os.path.join('uploads', video_filename)
+                    os.makedirs('uploads', exist_ok=True)
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    video_writer = cv2.VideoWriter(recorded_video_path, fourcc, 20.0, (frame.shape[1], frame.shape[0]))
+                    record_start_time = time.time()
+                if video_writer is not None:
+                    video_writer.write(processed_frame)
+                    if time.time() - record_start_time > record_duration:
+                        video_writer.release()
+                        video_writer = None
+                        record_triggered = False
+                        # 这里需要将recorded_video_path保存到告警中，假设add_alert返回ID或使用全局
+                        print(f'Video recorded: {recorded_video_path}')
         
         except (GeneratorExit, ConnectionAbortedError):
             print("客户端断开连接，正在清理视频流资源...")
@@ -211,4 +244,4 @@ def stop_video_feed_service():
     global CAMERA_ACTIVE
     CAMERA_ACTIVE = False
     print("摄像头视频流已请求停止。")
-    return True 
+    return True

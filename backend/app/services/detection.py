@@ -8,7 +8,9 @@ from app.services import danger_zone as danger_zone_service
 from app.services.danger_zone import SAFETY_DISTANCE, LOITERING_THRESHOLD, TARGET_CLASSES
 # --- 结束 V4 ---
 from app.services.alerts import (
-    add_alert, update_loitering_time, reset_loitering_time, get_loitering_time,
+    add_alert_memory as add_alert, # 保留旧的内存告警作为兼容
+    create_alert, # 导入新的数据库告警函数
+    update_loitering_time, reset_loitering_time, get_loitering_time,
     update_detection_time, get_alerts, reset_alerts
 )
 from app.utils.geometry import point_in_polygon, distance_to_polygon
@@ -21,11 +23,13 @@ from app.services import violenceDetect
 # --- 新增：导入config模块以访问其状态 ---
 from app.routes import config as config_state
 # --- 结束新增 ---
-from app.models import BehaviorDetectionLog, Alert  # 需要创建对应的模型
-import uuid
-from datetime import datetime
-from app import db
-from collections import defaultdict  # 新增导入
+
+
+# --- 快照保存路径 ---
+SNAPSHOTS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'uploads', 'snapshots')
+os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+
+
 # --- 模型管理 (使用相对路径) ---
 # 路径是相对于 backend/app/services/ 目录的
 # '..' 回退到 backend/app/
@@ -166,11 +170,17 @@ def process_image(filepath, uploads_dir):
     output_url = f"/api/files/{output_filename}"
     print(f"图像处理完成，输出URL: {output_url}")
     
+    # --- FIX: 返回真实的数据库告警, 而不是旧的内存告警 ---
+    # get_alerts() 返回的是一个临时的内存列表，而 create_alert 已将告警存入数据库
+    # 此处我们返回一个确认信息，前端应通过访问告警中心API来获取最新列表
+    final_alerts = get_alerts() # 获取内存中的告警，用于即时（但不可靠）的反馈
+    
     return {
         "status": "success",
         "media_type": "image",
         "file_url": output_url,
-        "alerts": get_alerts()
+        "alerts": final_alerts, # 返回处理期间生成的内存告警
+        "message": "Processing complete. Check alert center for persistent alerts."
     }
 
 def process_video(filepath, uploads_dir):
@@ -378,11 +388,15 @@ def process_video(filepath, uploads_dir):
     output_url = f"/api/files/{output_filename}"
     print(f"视频处理完成，输出URL: {output_url}")
     
+    # --- FIX: 同上, 视频处理也应明确返回处理期间的告警 ---
+    final_alerts = get_alerts()
+    
     return {
         "status": "success",
         "media_type": "video",
         "file_url": output_url,
-        "alerts": get_alerts()
+        "alerts": final_alerts,
+        "message": "Processing complete. Check alert center for persistent alerts."
     }
 
 
@@ -422,20 +436,11 @@ def process_smoking_detection_hybrid(frame, person_results, face_results, smokin
 
                 smoking_results = smoking_model.predict(roi_crop, imgsz=640, verbose=False)
                 if len(smoking_results[0].boxes) > 0:
-                    # 获取最高置信度的检测结果
-                    max_conf_box = max(smoking_results[0].boxes, key=lambda x: x.conf)
-                    confidence = max_conf_box.conf.item()
-                    
-                    # 记录到数据库
-                    log_smoking_behavior(
-                        camera_id=camera_id,
-                        location_id=location_id,
-                        behavior_type="Smoking",
-                        confidence_score=confidence,
-                        detection_area="face_region"
-                    )
-                    
-                    # 可视化标记
+                    snapshot_path = save_snapshot(frame) # 保存快照
+                    add_alert("High-Confidence Smoking Detection in ROI", 
+                             event_type="smoking_detection", 
+                             details="高置信度吸烟检测行为", 
+                             snapshot_path=snapshot_path)
                     for s_box in smoking_results[0].boxes:
                         s_xyxy = s_box.xyxy.cpu().numpy().astype(int)[0]
                         abs_x1, abs_y1 = s_xyxy[0] + roi_x1, s_xyxy[1] + roi_y1
@@ -469,20 +474,11 @@ def process_smoking_detection_hybrid(frame, person_results, face_results, smokin
 
         smoking_results = smoking_model.predict(upper_body_crop, imgsz=1024, verbose=False)
         if len(smoking_results[0].boxes) > 0:
-            # 获取最高置信度的检测结果
-            max_conf_box = max(smoking_results[0].boxes, key=lambda x: x.conf)
-            confidence = max_conf_box.conf.item()
-            
-            # 记录到数据库
-            log_smoking_behavior(
-                camera_id=camera_id,
-                location_id=location_id,
-                behavior_type="Smoking",
-                confidence_score=confidence,
-                detection_area="upper_body"
-            )
-            
-            # 可视化标记
+            snapshot_path = save_snapshot(frame) # 保存快照
+            add_alert("Low-Confidence/Distant Smoking Detection in Upper Body",
+                     event_type="smoking_detection",
+                     details="低置信度/远距离吸烟检测行为",
+                     snapshot_path=snapshot_path)
             for s_box in smoking_results[0].boxes:
                 s_xyxy = s_box.xyxy.cpu().numpy().astype(int)[0]
                 abs_x1, abs_y1 = s_xyxy[0] + px1, s_xyxy[1] + py1
@@ -666,8 +662,12 @@ def process_object_detection_results(results, frame, time_diff, frame_count, cam
                 if loitering_time >= LOITERING_THRESHOLD:
                     # 使用纯红色
                     label_color = (0, 0, 255)  # BGR格式：红色
-                    alert_status = f"ID:{target_id} ({class_name}) staying in danger zone for {loitering_time:.1f}s"
-                    add_alert(alert_status)
+                    alert_status = f"ID:{id} ({display_name}) staying in danger zone for {loitering_time:.1f}s"
+                    snapshot_path = save_snapshot(frame) # 保存快照
+                    add_alert(alert_status,
+                             event_type="danger_zone_intrusion",
+                             details=f"人员 {display_name} 在危险区域停留 {loitering_time:.1f} 秒",
+                             snapshot_path=snapshot_path)
                 else:
                     # 根据停留时间从橙色到红色渐变
                     ratio = min(1.0, loitering_time / LOITERING_THRESHOLD)
@@ -684,8 +684,12 @@ def process_object_detection_results(results, frame, time_diff, frame_count, cam
                     # 从黄色(0,255,255)到绿色(0,255,0)渐变
                     label_color = (0, 255, int(255 * (1 - ratio)))
                     
-                    alert_status = f"ID:{target_id} ({class_name}) too close to danger zone ({distance:.1f}px)"
-                    add_alert(alert_status)
+                    alert_status = f"ID:{id} ({display_name}) too close to danger zone ({distance:.1f}px)"
+                    snapshot_path = save_snapshot(frame) # 保存快照
+                    add_alert(alert_status,
+                             event_type="proximity_warning",
+                             details=f"人员 {display_name} 过于接近危险区域，距离 {distance:.1f} 像素",
+                             snapshot_path=snapshot_path)
             
             # 在每个目标上方显示ID和类别
             label = f"ID:{target_id} {class_name}"
@@ -939,99 +943,29 @@ def process_pose_estimation_results(results, frame, time_diff, frame_count, came
                                 
                                 # 角度 < 45度判定为跌倒
                                 if angle < 45: 
-                                    # 缓存事件（不立即写入数据库）
-                                    fall_events.append({
-                                        "person_id": person_id,
-                                        "angle": angle,
-                                        "velocity_y": velocity_y,
-                                        "frame_count": frame_count,
-                                        "timestamp": datetime.now()
-                                    })
-                                    
-                                    # 画面标注跌倒信息
-                                    cv2.putText(
-                                        frame, 
-                                        f"FALL DETECTED: ID {person_id}", 
-                                        (int(box[0]), int(box[1] - 10)),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 
-                                        1, 
-                                        (0, 0, 255), 
-                                        2
-                                    )
+                                    alert_message = f"警告: 人员 {person_id} 可能已跌倒!"
+                                    snapshot_path = save_snapshot(frame) # 保存快照
+                                    add_alert(f"Fall Detected: Person ID {person_id} may have fallen.",
+                                             event_type="fall_detection",
+                                             details=f"检测到人员 {person_id} 可能跌倒，身体角度 {angle:.1f} 度",
+                                             snapshot_path=snapshot_path)
+                                    # 在人的边界框上方用红色字体标注
+                                    cv2.putText(frame, f"FALL DETECTED: ID {person_id}", 
+                                                (int(box[0]), int(box[1] - 10)),
+                                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                 else:
                     # 初始化新人员的姿态历史
                     pose_history[person_id] = [(centroid_y, 0)]
 
             # 显示调试信息（ID、速度、角度）
             debug_text = f"ID:{person_id} V:{velocity_y:.1f} A:{angle:.1f}"
-            cv2.putText(
-                frame, 
-                debug_text,
-                (int(box[0]), int(box[1] - 35)),
-                cv2.FONT_HERSHEY_SIMPLEX, 
-                0.7, 
-                (255, 255, 0), 
-                2
-            )
+            cv2.putText(frame, debug_text,
+                        (int(box[0]), int(box[1] - 35)), # 显示在FALL DETECTED文字的上方
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
 
-def log_fall_detection(camera_id, location_id, person_id, angle, velocity_y):
-    """记录跌倒检测结果到数据库（复用ORM模型）"""
-    try:
-        detection_id = str(uuid.uuid4())
-        current_time = datetime.now()
-        
-        # 计算风险等级（角度越小/速度越大，风险越高）
-        if angle < 30 and velocity_y > 20:
-            risk_level = "high"
-        elif angle < 45 and velocity_y > 15:
-            risk_level = "medium"
-        else:
-            risk_level = "low"
-        
-        # 计算置信度（角度越小，置信度越高）
-        confidence_score = min(1.0, (45 - angle) / 45)
-        
-        # 创建行为检测记录（passenger_id设为None避免外键冲突）
-        behavior_log = BehaviorDetectionLog(
-            detection_id=detection_id,
-            passenger_id=None,  # 不关联乘客ID（避免外键约束）
-            camera_id=camera_id,
-            location_id=location_id,
-            detection_time=current_time,
-            behavior_type="Fall",
-            confidence_score=confidence_score,
-            risk_level=risk_level,
-            detection_area="full_frame"
-        )
-        
-        # 创建报警记录
-        alert = Alert(
-            alert_id=str(uuid.uuid4()),
-            detection_id=detection_id,
-            alert_time=current_time,
-            alert_type="high_risk_behavior",
-            severity=risk_level,
-            status="unprocessed",
-            camera_id=camera_id,
-            location_id=location_id,
-            message=f"检测到跌倒行为 (人员ID: {person_id}), 置信度: {confidence_score:.2f}"
-        )
-        
-        db.session.add(behavior_log)
-        db.session.add(alert)
-        db.session.commit()
-        print(f"跌倒记录成功，detection_id={detection_id}")
-        return detection_id
-        
-    except IntegrityError as e:
-        print(f"跌倒记录外键冲突: {str(e)}")
-        db.session.rollback()
-    except Exception as e:
-        print(f"跌倒记录失败: {str(e)}")
-        db.session.rollback()
-    return None
-
+# 为了保持兼容，我们将旧的函数重命名
+process_detection_results = process_object_detection_results
 
 # --- 新的、带结果黏滞和多线程优化的高频人脸识别逻辑 ---
 
@@ -1201,8 +1135,14 @@ def process_violence_detection(filepath, uploads_dir, camera_id, location_id):
     alerts = []
     if violence_prob > 0.7:
         alerts.append("warning: 检测到高概率暴力行为!")
+        add_alert(f"High probability ({violence_prob:.2f}) of violence detected.",
+                 event_type="violence_detection",
+                 details=f"检测到高概率暴力行为，置信度 {violence_prob:.2f}")
     elif violence_prob > 0.5:
         alerts.append("caution: 检测到可能的暴力行为")
+        add_alert(f"Possible violence detected ({violence_prob:.2f}).",
+                 event_type="violence_detection", 
+                 details=f"检测到可能的暴力行为，置信度 {violence_prob:.2f}")
     else:
         alerts.append("safe: 未检测到明显暴力行为")
 
@@ -1213,62 +1153,18 @@ def process_violence_detection(filepath, uploads_dir, camera_id, location_id):
         "alerts": alerts,
         "violenceProbability": float(violence_prob),
         "nonViolenceProbability": float(non_violence_prob)
-    }
+    } 
 
-
-def log_violence_detection(camera_id, location_id, violence_prob, non_violence_prob):
-    """记录暴力检测结果到数据库"""
+def save_snapshot(frame):
+    """保存当前帧的快照并返回相对路径"""
+    timestamp = int(time.time() * 1000)
+    filename = f"snapshot_{timestamp}.jpg"
+    filepath = os.path.join(SNAPSHOTS_DIR, filename)
+    
     try:
-        detection_id = str(uuid.uuid4())
-        current_time = datetime.now()
-        
-        # 确定风险等级和报警信息
-        if violence_prob > 0.7:
-            risk_level = "high"
-            severity = "high"
-            message = f"高概率暴力行为! 概率: {violence_prob:.2f}"
-        elif violence_prob > 0.5:
-            risk_level = "medium"
-            severity = "medium"
-            message = f"可能的暴力行为 概率: {violence_prob:.2f}"
-        else:
-            risk_level = "low"
-            severity = "low"
-            message = f"未检测到明显暴力行为 概率: {violence_prob:.2f}"
-        
-        # 创建行为检测记录
-        behavior_log = BehaviorDetectionLog(
-            detection_id=detection_id,
-            passenger_id=None,  # 不关联乘客
-            camera_id=camera_id,
-            location_id=location_id,
-            detection_time=current_time,
-            behavior_type="Violence",
-            confidence_score=violence_prob,
-            risk_level=risk_level,
-            detection_area="full_frame"
-        )
-        
-        # 创建报警记录
-        alert = Alert(
-            alert_id=str(uuid.uuid4()),
-            detection_id=detection_id,
-            alert_time=current_time,
-            alert_type="high_risk_behavior",
-            severity=severity,
-            status="unprocessed",
-            camera_id=camera_id,
-            location_id=location_id,
-            message=message
-        )
-        
-        db.session.add(behavior_log)
-        db.session.add(alert)
-        db.session.commit()
-        print(f"暴力记录成功，detection_id={detection_id}")
-        return detection_id
-        
+        cv2.imwrite(filepath, frame)
+        # 返回可供前端访问的相对URL
+        return f"/api/files/snapshots/{filename}"
     except Exception as e:
-        print(f"暴力记录失败: {str(e)}")
-        db.session.rollback()
-    return None
+        print(f"快照保存失败: {e}")
+        return None

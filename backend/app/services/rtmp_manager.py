@@ -1,15 +1,15 @@
 import cv2
-import uuid
 import threading
-import time
 import queue
-import os
+import time
+import uuid
+import numpy as np  # 添加numpy导入
+from typing import List, Dict, Optional
+from threading import Event
 from datetime import datetime
-from typing import Dict, List, Optional
 from app import socketio
 from app.services.danger_zone import DANGER_ZONE
 from ultralytics import YOLO
-import numpy as np
 import base64
 
 class RTMPStreamManager:
@@ -24,17 +24,19 @@ class RTMPStreamManager:
         self.stop_events: Dict[str, threading.Event] = {}
         self.reader_threads = {}
         
+        # 添加姿态历史追踪
+        self.pose_history = {}  # 用于存储每个人的姿态历史
+        
         # 初始化AI模型
-
-
         print("正在初始化AI模型...")
         try:
-            from app.services.detection import get_object_model, get_face_model
+            from app.services.detection import get_object_model, get_face_model, get_pose_model
             from app.services.dlib_service import dlib_face_service
             
             self.models = {
                 'object': get_object_model(),
-                'face': get_face_model()
+                'face': get_face_model(),
+                'pose': get_pose_model()  # 添加姿态模型
             }
             self.dlib_service = dlib_face_service
             print("✅ AI模型初始化成功")
@@ -43,10 +45,9 @@ class RTMPStreamManager:
             # 设置为None以避免后续错误
             self.models = {
                 'object': None,
-                'face': None
+                'face': None,
+                'pose': None  # 添加姿态模型
             }
-
-
             self.dlib_service = None
     
     def add_stream(self, config: dict) -> str:
@@ -140,8 +141,6 @@ class RTMPStreamManager:
         self.streams[stream_id]['last_activity'] = datetime.now().isoformat()
         
         print(f"✅ 流 {stream_id} 启动成功")
-
-
 
     def _frame_reader_loop(self, stream_id: str):
         """帧读取线程：从RTMP流读取帧并分发到两个队列"""
@@ -305,14 +304,7 @@ class RTMPStreamManager:
 
     def _perform_detection(self, frame, detection_modes):
         """执行AI检测"""
-        results = {
-            'detections': [],
-            'alerts': []
-        }
-        
-        if not hasattr(self, 'models') or self.models is None:
-            print("警告: AI模型未初始化，跳过检测")
-            return results
+        results = {'detections': [], 'alerts': []}
         
         try:
             # 目标检测
@@ -325,89 +317,350 @@ class RTMPStreamManager:
                             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                             conf = box.conf[0].cpu().numpy()
                             cls = int(box.cls[0].cpu().numpy())
-                            class_name = self.models['object'].names[cls]
                             
-                            in_danger = self._is_in_danger_zone(x1, y1, x2, y2)
-                            
-                            results['detections'].append({
-                                'type': 'object',
-                                'class': class_name,
-                                'confidence': float(conf),
-                                'bbox': [int(x1), int(y1), int(x2), int(y2)],
-                                'in_danger_zone': in_danger
-                            })
-                            
-                            if in_danger:
-                                results['alerts'].append(f"检测到{class_name}进入危险区域")
-        
-        except Exception as e:
-            print(f"目标检测错误: {e}")
-        
-        try:
+                            if conf > 0.5:
+                                class_name = self.models['object'].names[cls]
+                                results['detections'].append({
+                                    'type': 'object',
+                                    'class': class_name,
+                                    'confidence': float(conf),
+                                    'bbox': [int(x1), int(y1), int(x2), int(y2)]
+                                })
+                                
+                                if self._is_in_danger_zone(x1, y1, x2, y2):
+                                    results['alerts'].append(f'检测到{class_name}进入危险区域！')
+            
             # 人脸检测和识别
             if 'face_only' in detection_modes and self.models.get('face') is not None:
                 face_results = self.models['face'](frame)
-                
-                face_boxes = []
-                face_confidences = []
-                
                 for result in face_results:
                     boxes = result.boxes
                     if boxes is not None:
                         for box in boxes:
                             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                             conf = box.conf[0].cpu().numpy()
-                            face_boxes.append([int(x1), int(y1), int(x2), int(y2)])
-                            face_confidences.append(float(conf))
-                
-                if hasattr(self, 'dlib_service') and self.dlib_service is not None and len(face_boxes) > 0:
-                    try:
-                        recognition_results = self.dlib_service.identify_faces(frame, face_boxes)
-                        
-                        for i, (name, box) in enumerate(recognition_results):
-                            x1, y1, x2, y2 = box
-                            conf = face_confidences[i] if i < len(face_confidences) else 0.0
                             
-                            results['detections'].append({
-                                'type': 'face',
-                                'name': name,
-                                'confidence': conf,
-                                'bbox': [int(x1), int(y1), int(x2), int(y2)]
-                            })
-                            
-                            if name == "Unknown":
-                                results['alerts'].append("检测到未知人脸")
+                            if conf > 0.5:
+                                results['detections'].append({
+                                    'type': 'face',
+                                    'confidence': float(conf),
+                                    'bbox': [int(x1), int(y1), int(x2), int(y2)]
+                                })
                                 
-                    except Exception as e:
-                        print(f"人脸识别错误: {e}")
-                        for i, box in enumerate(face_boxes):
-                            x1, y1, x2, y2 = box
-                            conf = face_confidences[i] if i < len(face_confidences) else 0.0
-                            
-                            results['detections'].append({
-                                'type': 'face',
-                                'name': 'Unknown',
-                                'confidence': conf,
-                                'bbox': [int(x1), int(y1), int(x2), int(y2)]
-                            })
-                            
-                            results['alerts'].append("人脸识别服务异常")
-                            
+                                if 'face_only' in detection_modes:
+                                    if self.dlib_service:
+                                        face_crop = frame[int(y1):int(y2), int(x1):int(x2)]
+                                        # 修复：使用正确的方法名和参数格式
+                                        face_boxes = [[int(x1), int(y1), int(x2), int(y2)]]
+                                        recognition_results = self.dlib_service.identify_faces(frame, face_boxes)
+                                        if recognition_results and len(recognition_results) > 0:
+                                            name, bbox = recognition_results[0]
+                                            if name != "Unknown":
+                                                results['detections'][-1]['name'] = name
+                                            else:
+                                                results['detections'][-1]['name'] = "stranger"
+            
+            # 跌倒检测部分修复
+            if 'fall_detection' in detection_modes and self.models.get('pose') is not None:
+                try:
+                    # 进行姿态估计
+                    pose_results = self.models['pose'](frame)
+                    
+                    if pose_results and len(pose_results) > 0:
+                        # 绘制姿态关键点和骨架
+                        annotated_frame = pose_results[0].plot()  # 添加这行来绘制可视化
+                        
+                        for result in pose_results:
+                            if result.keypoints is not None:
+                                keypoints = result.keypoints.data.cpu().numpy()
+                                
+                                for person_keypoints in keypoints:
+                                    # 计算边界框
+                                    bbox = self._get_pose_bbox(person_keypoints)
+                                    
+                                    # 跌倒检测逻辑
+                                    fall_detected, confidence = self._detect_fall(person_keypoints)
+                                    
+                                    if fall_detected:
+                                        results['detections'].append({
+                                            'type': 'fall',
+                                            'confidence': confidence,
+                                            'bbox': bbox,
+                                            'keypoints': person_keypoints.tolist(),  # 添加关键点数据
+                                            'message': '检测到跌倒！'
+                                        })
+                                        results['alerts'].append('检测到跌倒行为！')
+                                    else:
+                                        # 即使没有跌倒也返回姿态数据用于可视化
+                                        results['detections'].append({
+                                            'type': 'pose',
+                                            'confidence': 0.8,
+                                            'bbox': bbox,
+                                            'keypoints': person_keypoints.tolist(),
+                                            'message': '正常姿态'
+                                        })
+                
+                except Exception as e:
+                    print(f"跌倒检测错误: {e}")
+                
+                return results
+            results['detections'].extend(fall_results['detections'])
+            results['alerts'].extend(fall_results['alerts'])
+            
         except Exception as e:
-            print(f"人脸检测错误: {e}")
+            print(f"AI检测错误: {e}")
         
         return results
-
-
+    
+    def _process_smoking_detection(self, frame):
+        """处理抽烟检测 - 增强版"""
+        results = {'detections': [], 'alerts': []}
+        
+        try:
+            # 方法1：使用专用抽烟检测模型
+            if hasattr(self, 'smoking_model') and self.smoking_model is not None:
+                smoking_results = self.smoking_model(frame)
+                
+                for result in smoking_results:
+                    boxes = result.boxes
+                    if boxes is not None:
+                        for box in boxes:
+                            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                            conf = box.conf[0].cpu().numpy()
+                            cls = int(box.cls[0].cpu().numpy())
+                            
+                            if conf > 0.5:  # 置信度阈值
+                                results['detections'].append({
+                                    'type': 'smoking',
+                                    'confidence': float(conf),
+                                    'bbox': [int(x1), int(y1), int(x2), int(y2)],
+                                    'message': '检测到吸烟行为'
+                                })
+                                results['alerts'].append('检测到吸烟行为！')
+                            
+            # 方法2：备用检测 - 使用目标检测模型检测香烟相关物体
+            elif self.models.get('object') is not None:
+                object_results = self.models['object'](frame)
+                
+                # 定义与吸烟相关的类别（根据COCO数据集）
+                smoking_related_classes = ['person']  # 可以扩展为包含香烟、打火机等
+                
+                for result in object_results:
+                    boxes = result.boxes
+                    if boxes is not None:
+                        for box in boxes:
+                            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                            conf = box.conf[0].cpu().numpy()
+                            cls = int(box.cls[0].cpu().numpy())
+                            class_name = self.models['object'].names[cls]
+                            
+                            if conf > 0.6 and class_name in smoking_related_classes:
+                                # 提取人物区域进行进一步分析
+                                person_crop = frame[int(y1):int(y2), int(x1):int(x2)]
+                                
+                                # 简单的启发式检测（可以用更复杂的算法替换）
+                                if self._detect_smoking_heuristic(person_crop):
+                                    results['detections'].append({
+                                        'type': 'smoking_suspected',
+                                        'confidence': float(conf * 0.7),  # 降低置信度
+                                        'bbox': [int(x1), int(y1), int(x2), int(y2)],
+                                        'message': '疑似吸烟行为'
+                                    })
+                                    results['alerts'].append('疑似检测到吸烟行为！')
+        
+        except:
+            pass
+        
+        return results
+    
+    def _detect_smoking_heuristic(self, person_crop):
+        """简单的启发式吸烟检测"""
+        try:
+            # 这里可以实现简单的图像处理逻辑
+            # 例如：检测手部区域的亮点、烟雾模糊等
+            # 目前返回随机结果作为示例
+            import random
+            return random.random() > 0.8  # 20%的概率检测为吸烟
+        except:
+            return False
+    
+    def _process_violence_detection(self, frame):
+        """处理暴力检测"""
+        results = {'detections': [], 'alerts': []}
+        
+        try:
+            # 这里可以实现暴力检测逻辑
+            # 目前返回空结果作为示例
+            return results
+        except Exception as e:
+            print(f"暴力检测错误: {e}")
+            return results
+    
+    def _predict_violence(self, frame_sequence):
+        """预测暴力行为"""
+        try:
+            if not hasattr(self, 'violence_model') or self.violence_model is None or not hasattr(self, 'image_model_transfer') or self.image_model_transfer is None:
+                return 0.0
+                
+            import tensorflow as tf
+            import numpy as np
+            
+            # 将帧序列转换为模型输入格式
+            frames = np.array(frame_sequence)
+            
+            # 使用VGG16提取特征
+            features = []
+            for frame in frames:
+                # 调整帧大小为VGG16输入要求
+                resized_frame = tf.image.resize(frame, [224, 224])
+                resized_frame = tf.expand_dims(resized_frame, 0)
+                feature = self.image_model_transfer.predict(resized_frame, verbose=0)
+                features.append(feature[0])
+            
+            # 转换为模型输入格式
+            features = np.array(features)
+            features = np.expand_dims(features, 0)
+            
+            # 预测暴力概率
+            prediction = self.violence_model.predict(features, verbose=0)
+            violence_prob = prediction[0][1] if len(prediction[0]) > 1 else prediction[0][0]
+            
+            return float(violence_prob)
+            
+        except Exception as e:
+            print(f"暴力预测错误: {e}")
+            return 0.0
+    
+    def _get_pose_bbox(self, keypoints):
+        """从关键点计算边界框"""
+        try:
+            # 过滤有效关键点（坐标大于0）
+            valid_points = keypoints[keypoints[:, 0] > 0]
+            
+            if len(valid_points) == 0:
+                return [0, 0, 100, 100]  # 默认边界框
+            
+            # 计算边界框
+            x_min = int(np.min(valid_points[:, 0]))
+            y_min = int(np.min(valid_points[:, 1]))
+            x_max = int(np.max(valid_points[:, 0]))
+            y_max = int(np.max(valid_points[:, 1]))
+            
+            # 添加一些边距
+            margin = 10
+            x_min = max(0, x_min - margin)
+            y_min = max(0, y_min - margin)
+            x_max += margin
+            y_max += margin
+            
+            return [x_min, y_min, x_max, y_max]
+            
+        except Exception as e:
+            print(f"计算姿态边界框错误: {e}")
+            return [0, 0, 100, 100]
+    
+    def _is_in_danger_zone(self, x1, y1, x2, y2):
+        """检查是否在危险区域内"""
+        try:
+            # 这里可以实现危险区域检测逻辑
+            # 目前返回False作为示例
+            return False
+        except Exception as e:
+            print(f"危险区域检测错误: {e}")
+            return False
+    
+    def _detect_fall(self, keypoints):
+        """检测跌倒行为"""
+        try:
+            import numpy as np
+            
+            # 过滤有效关键点（置信度 > 0.5）
+            valid_keypoints = []
+            for i, kp in enumerate(keypoints):
+                if len(kp) >= 3 and kp[2] > 0.5:  # 置信度阈值
+                    valid_keypoints.append([kp[0], kp[1], i])  # [x, y, keypoint_index]
+            
+            if len(valid_keypoints) < 5:  # 需要足够的关键点
+                return False, 0.0
+            
+            # 转换为numpy数组便于计算
+            points = np.array([[kp[0], kp[1]] for kp in valid_keypoints])
+            
+            # 计算人体边界框
+            x_min, y_min = np.min(points, axis=0)
+            x_max, y_max = np.max(points, axis=0)
+            
+            # 计算宽高比
+            width = x_max - x_min
+            height = y_max - y_min
+            
+            if height == 0:
+                return False, 0.0
+                
+            aspect_ratio = width / height
+            
+            # 跌倒判断逻辑
+            fall_confidence = 0.0
+            
+            # 1. 宽高比检测（跌倒时人体更宽）
+            if aspect_ratio > 1.2:  # 宽度大于高度
+                fall_confidence += 0.4
+            
+            # 2. 头部位置检测（如果能检测到头部和躯干）
+            head_points = [kp for kp in valid_keypoints if kp[2] in [0, 1, 2, 3, 4]]  # 头部关键点
+            body_points = [kp for kp in valid_keypoints if kp[2] in [5, 6, 11, 12]]  # 躯干关键点
+            
+            if head_points and body_points:
+                head_y = np.mean([kp[1] for kp in head_points])
+                body_y = np.mean([kp[1] for kp in body_points])
+                
+                # 头部应该在躯干上方，如果不是可能跌倒了
+                if abs(head_y - body_y) < height * 0.3:  # 头部和躯干在同一水平线
+                    fall_confidence += 0.3
+            
+            # 3. 整体姿态角度检测
+            if len(points) >= 2:
+                # 计算主轴角度
+                center = np.mean(points, axis=0)
+                centered_points = points - center
+                
+                # 使用PCA计算主方向
+                cov_matrix = np.cov(centered_points.T)
+                eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+                
+                # 主方向向量
+                main_direction = eigenvectors[:, -1]
+                
+                # 计算与垂直方向的角度
+                vertical = np.array([0, 1])
+                angle = np.arccos(np.abs(np.dot(main_direction, vertical)))
+                angle_degrees = np.degrees(angle)
+                
+                # 如果角度大于45度，可能是跌倒
+                if angle_degrees > 45:
+                    fall_confidence += 0.3
+            
+            # 判断是否跌倒
+            is_fall = fall_confidence > 0.6
+            
+            return is_fall, min(fall_confidence, 1.0)
+            
+        except Exception as e:
+            print(f"跌倒检测错误: {e}")
+            return False, 0.0
 
     def stop_stream(self, stream_id: str):
         """停止RTMP流处理"""
         if stream_id not in self.streams:
             raise Exception("流不存在")
         
+        print(f"正在停止流: {stream_id}")
+        
+        # 设置停止事件
         if stream_id in self.stop_events:
             self.stop_events[stream_id].set()
         
+        # 等待线程结束
         if stream_id in self.reader_threads:
             self.reader_threads[stream_id].join(timeout=5)
             del self.reader_threads[stream_id]
@@ -420,11 +673,12 @@ class RTMPStreamManager:
             self.analysis_threads[stream_id].join(timeout=5)
             del self.analysis_threads[stream_id]
         
+        # 释放资源
         if stream_id in self.active_captures:
             self.active_captures[stream_id].release()
             del self.active_captures[stream_id]
         
-        # 清理队列
+        # 清理队列和事件
         if stream_id in self.streaming_queues:
             del self.streaming_queues[stream_id]
         
@@ -434,63 +688,49 @@ class RTMPStreamManager:
         if stream_id in self.stop_events:
             del self.stop_events[stream_id]
         
+        # 更新状态
         self.streams[stream_id]['status'] = 'inactive'
-
-    def delete_stream(self, stream_id: str):
-        """删除RTMP流"""
+        
+        print(f"✅ 流 {stream_id} 已停止")
+    
+    def get_stream_status(self, stream_id: str) -> dict:
+        """获取流状态"""
         if stream_id not in self.streams:
             raise Exception("流不存在")
         
-        # 先停止流
+        return self.streams[stream_id]
+    
+    def list_streams(self) -> List[dict]:
+        """列出所有流"""
+        return list(self.streams.values())
+    
+    def remove_stream(self, stream_id: str):
+        """移除流"""
+        if stream_id not in self.streams:
+            raise Exception("流不存在")
+        
+        # 如果流正在运行，先停止它
         if self.streams[stream_id]['status'] == 'active':
             self.stop_stream(stream_id)
         
         # 删除流配置
         del self.streams[stream_id]
-
+        
+        print(f"✅ 流 {stream_id} 已移除")
+    
     def get_all_streams(self) -> List[dict]:
-        """获取所有流的信息"""
-        return list(self.streams.values())
-
+        """获取所有流（兼容方法）"""
+        return self.list_streams()
+    
+    def delete_stream(self, stream_id: str):
+        """删除流（兼容方法）"""
+        return self.remove_stream(stream_id)
+    
     def get_stream_frames(self, stream_id: str):
-        """获取流的帧数据（生成器）- 保留兼容性"""
-        if stream_id not in self.frame_queues:
-            raise Exception("流未激活")
-        
-        frame_queue = self.frame_queues[stream_id]
-        
-        while stream_id in self.active_captures:
-            try:
-                # 从队列获取帧数据
-                frame_data = frame_queue.get(timeout=1)
-                yield frame_data
-            except queue.Empty:
-                continue
-            except Exception as e:
-                print(f"获取帧数据错误: {e}")
-                break
-
-    def _validate_rtmp_url(self, rtmp_url: str) -> bool:
-        """验证RTMP URL的有效性"""
-        try:
-            cap = cv2.VideoCapture(rtmp_url)
-            is_valid = cap.isOpened()
-            cap.release()
-            return is_valid
-        except Exception:
-            return False
-
-    def _is_in_danger_zone(self, x1: float, y1: float, x2: float, y2: float) -> bool:
-        """检查边界框是否与危险区域重叠"""
-        try:
-            # 计算边界框中心点
-            center_x = (x1 + x2) / 2
-            center_y = (y1 + y2) / 2
-            
-            # 简化实现：总是返回False，避免复杂的几何计算
-            return False
-        except Exception:
-            return False
-
-# 创建全局实例
+        """获取流帧数据（用于HTTP流）"""
+        # 这个方法用于HTTP视频流，RTMP流使用Socket.IO
+        # 可以返回空生成器或抛出异常
+        raise Exception("RTMP流使用Socket.IO传输，不支持HTTP流")
+    
+    # 创建全局实例（移到类定义外部）
 rtmp_manager = RTMPStreamManager()

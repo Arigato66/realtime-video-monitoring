@@ -9,6 +9,12 @@ from app.celery_app import celery_app
 from app import socketio
 import json
 
+# --- 新增: 导入告警和快照服务 ---
+from app.services.alerts import create_alert
+from app.services.detection import save_snapshot
+# --- 结束新增 ---
+
+
 @celery_app.task(bind=True)
 def process_rtmp_stream(self, stream_id: str, stream_config: dict):
     """处理单路RTMP视频流的Celery任务"""
@@ -57,6 +63,13 @@ def process_rtmp_stream(self, stream_id: str, stream_config: dict):
                     frame, models, detection_modes, stream_config.get('danger_zones', [])
                 )
                 
+                # --- V2: 将实时告警发送到独立的 channel ---
+                if ai_results.get('alerts'):
+                    socketio.emit('update_alerts', {
+                        'stream_id': stream_id,
+                        'alerts': ai_results['alerts']
+                    }, namespace='/video')
+
                 # 转换帧为Base64
                 _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 frame_base64 = base64.b64encode(buffer).decode('utf-8')
@@ -130,11 +143,20 @@ def process_frame_with_ai(frame, models, detection_modes, danger_zones):
                         
                         # 检查危险区域
                         if check_danger_zone(detection['bbox'], danger_zones):
+                            alert_message = f'{detection["class"]}进入危险区域'
                             results['alerts'].append({
                                 'type': 'danger_zone',
-                                'message': f'{detection["class"]}进入危险区域',
+                                'message': alert_message,
                                 'severity': 'high'
                             })
+                            # --- 新增: 保存快照并创建数据库告警 ---
+                            snapshot_path = save_snapshot(frame)
+                            create_alert(
+                                event_type="Danger Zone Intrusion (Live)",
+                                details=alert_message,
+                                frame_snapshot_path=snapshot_path
+                            )
+                            # --- 结束新增 ---
         
         elif mode == 'face_detection':
             # 人脸检测

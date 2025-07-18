@@ -84,7 +84,7 @@ const handleLogin = async () => {
       // 登录成功，跳转首页
       router.push('/home')
     } else {
-      errorMsg.value = '用户名或密码错误'
+      errorMsg.value = '用户名或密码错误。'
     }
   } catch (error) {
     // 处理请求异常（如网络错误、后端500错误）

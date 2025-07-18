@@ -139,19 +139,16 @@ def init_database():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
 
-        # 创建报警记录表
+        # 创建报警记录表 - 匹配SQLAlchemy模型结构
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS alerts (
-            alert_id VARCHAR(36) NOT NULL PRIMARY KEY COMMENT '报警ID(UUID)',
-            detection_id VARCHAR(36) COMMENT '关联的行为检测ID',
-            alert_time DATETIME NOT NULL COMMENT '报警时间',
-            alert_type VARCHAR(50) NOT NULL COMMENT '报警类型(blacklist_match/high_risk_behavior)',
-            severity VARCHAR(20) COMMENT '严重程度(critical/high/medium/low)',
-            status VARCHAR(20) DEFAULT 'unprocessed' COMMENT '处理状态(unprocessed/processing/resolved)',
-            camera_id VARCHAR(36) COMMENT '摄像头ID',
-            location_id VARCHAR(36) COMMENT '位置ID',
-            message TEXT COMMENT '告警消息',
-            FOREIGN KEY (detection_id) REFERENCES behavior_detection_logs(detection_id)  
+            id INT AUTO_INCREMENT PRIMARY KEY COMMENT '告警ID(自增)',
+            timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '告警时间',
+            event_type VARCHAR(50) NOT NULL COMMENT '事件类型',
+            details VARCHAR(255) COMMENT '详细信息',
+            status VARCHAR(20) DEFAULT 'unprocessed' COMMENT '处理状态(unprocessed/viewed/resolved)',
+            video_path VARCHAR(255) COMMENT '视频路径',
+            frame_snapshot_path VARCHAR(255) COMMENT '快照路径'
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
 

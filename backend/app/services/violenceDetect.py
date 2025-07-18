@@ -198,7 +198,10 @@ def process_frame(frame, img_size=224):
     """处理单帧图像"""
     RGB_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     res = cv2.resize(RGB_img, dsize=(img_size, img_size), interpolation=cv2.INTER_CUBIC)
-    return (res / 255.).astype(np.float32)
+    
+    # 优化内存使用：直接在uint8上操作，然后转换为float32
+    res = (res.astype(np.float32)) / 255.0
+    return res
 
 if __name__ == "__main__":
     import argparse

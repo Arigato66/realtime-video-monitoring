@@ -57,6 +57,11 @@
                 <input type="checkbox" v-model="rtmpConfig.detection_modes" value="smoking_detection" />
                 抽烟检测
               </label>
+              <!-- 新增暴力检测选项 -->
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="rtmpConfig.detection_modes" value="violence_detection" />
+                暴力检测
+              </label>
             </div>
           </div>
         </div>
@@ -71,9 +76,6 @@
     </div>
 
     <div class="main-content">
-      <!-- 引入复用的侧边栏组件 -->
-      <Sidebar :currentPath="currentPath" />
-
       <!-- 主内容区域 - 实时视频监控系统内容 -->
       <main class="content-area">
         <div class="monitor-page">
@@ -1018,30 +1020,30 @@ const connectToRtmpSocket = (streamId) => {
     console.log(`📺 收到video_frame事件，帧数: ${frameCount}, 流ID: ${data.stream_id}`)
     
     if (data.stream_id === currentRtmpStream.value && canvasContext && rtmpCanvas.value) {
-      // 动态更新Canvas和原始尺寸
-      if (data.original_width && data.original_height) {
-        // 更新原始尺寸
-        originalWidth.value = data.original_width
-        originalHeight.value = data.original_height
+        // 动态更新Canvas和原始尺寸
+        if (data.original_width && data.original_height) {
+          // 更新原始尺寸
+          originalWidth.value = data.original_width
+          originalHeight.value = data.original_height
+          
+          // 更新Canvas尺寸为原始尺寸
+          canvasWidth.value = data.original_width
+          canvasHeight.value = data.original_height
+          
+          // 更新Canvas元素的实际尺寸
+          rtmpCanvas.value.width = data.original_width
+          rtmpCanvas.value.height = data.original_height
+          
+          console.log(`📐 Canvas尺寸已更新为: ${data.original_width}x${data.original_height}`)
+        }
         
-        // 更新Canvas尺寸为原始尺寸
-        canvasWidth.value = data.original_width
-        canvasHeight.value = data.original_height
-        
-        // 更新Canvas元素的实际尺寸
-        rtmpCanvas.value.width = data.original_width
-        rtmpCanvas.value.height = data.original_height
-        
-        console.log(`📐 Canvas尺寸已更新为: ${data.original_width}x${data.original_height}`)
+        if (data.frame_data) {
+          drawVideoFrame(data.frame_data)
+          console.log(`✅ 成功绘制第${frameCount}帧`)
+        } else {
+          console.error('❌ 收到的帧数据为空')
+        }
       }
-      
-      if (data.frame_data) {
-        drawVideoFrame(data.frame_data)
-        console.log(`✅ 成功绘制第${frameCount}帧`)
-      } else {
-        console.error('❌ 收到的帧数据为空')
-      }
-    }
   })
   
   // 接收AI检测结果
@@ -1052,7 +1054,7 @@ const connectToRtmpSocket = (streamId) => {
       alerts.value = data.alerts || []
       
       if (canvasContext && rtmpCanvas.value) {
-        drawDetectionResults()
+        drawDetectionResults(currentDetections)
       }
     }
   })
@@ -1192,7 +1194,7 @@ const drawVideoFrame = (frameData) => {
         canvasContext.drawImage(img, 0, 0, rtmpCanvas.value.width, rtmpCanvas.value.height)
         
         // 绘制检测结果
-        drawDetectionResults()
+        drawDetectionResults(currentDetections)
         
         // 释放临时URL
         URL.revokeObjectURL(imageUrl)
@@ -1214,69 +1216,84 @@ const drawVideoFrame = (frameData) => {
 }
 
 // 在Canvas上绘制AI检测结果
-const drawDetectionResults = () => {
-  if (!canvasContext || !currentDetections.length) return
+const drawDetectionResults = (detections) => {
+  if (!canvasContext || !detections || detections.length === 0) return
   
-  try {
-    // 由于现在Canvas尺寸就是原始尺寸，不需要缩放
-    const scaleX = 1  // canvasWidth.value / originalWidth.value
-    const scaleY = 1  // canvasHeight.value / originalHeight.value
+  detections.forEach(detection => {
+    const { type, bbox, confidence, message, keypoints } = detection
+    const [x1, y1, x2, y2] = bbox
     
-    // 设置绘制样式
+    // 设置样式
+    canvasContext.strokeStyle = type === 'fall' ? '#ff0000' : 
+                               type === 'pose' ? '#00ff00' : 
+                               type === 'object' ? '#00ff00' : '#0099ff'
     canvasContext.lineWidth = 2
-    canvasContext.font = '16px Arial'
+    canvasContext.fillStyle = type === 'fall' ? '#ff0000' : 
+                             type === 'pose' ? '#00ff00' : 
+                             type === 'object' ? '#00ff00' : '#0099ff'
+    canvasContext.font = '14px Arial'
     
-    currentDetections.forEach(detection => {
-      // 直接使用原始坐标，不需要缩放
-      const [x1, y1, x2, y2] = detection.bbox
-      const scaledX1 = x1 * scaleX
-      const scaledY1 = y1 * scaleY
-      const scaledX2 = x2 * scaleX
-      const scaledY2 = y2 * scaleY
+    // 绘制边界框
+    canvasContext.strokeRect(x1, y1, x2 - x1, y2 - y1)
+    
+    // 绘制标签
+    const label = `${message || type} (${(confidence * 100).toFixed(1)}%)`
+    const textWidth = canvasContext.measureText(label).width
+    
+    // 绘制标签背景
+    canvasContext.fillRect(x1, y1 - 25, textWidth + 10, 20)
+    
+    // 绘制标签文字
+    canvasContext.fillStyle = '#ffffff'
+    canvasContext.fillText(label, x1 + 5, y1 - 10)
+    
+    // 如果是姿态检测，绘制关键点和骨架
+    if ((type === 'fall' || type === 'pose') && keypoints) {
+      drawPoseKeypoints(keypoints)
+    }
+  })
+}
+
+// 新增：绘制人体关键点和骨架的函数
+const drawPoseKeypoints = (keypoints) => {
+  if (!canvasContext || !keypoints) return
+  
+  // YOLO姿态关键点连接定义（17个关键点）
+  const connections = [
+    [0, 1], [0, 2], [1, 3], [2, 4],  // 头部
+    [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],  // 手臂
+    [5, 11], [6, 12], [11, 12],  // 躯干
+    [11, 13], [13, 15], [12, 14], [14, 16]  // 腿部
+  ]
+  
+  // 绘制骨架连接
+  canvasContext.strokeStyle = '#ff6b6b'
+  canvasContext.lineWidth = 2
+  
+  connections.forEach(([start, end]) => {
+    if (start < keypoints.length && end < keypoints.length) {
+      const startPoint = keypoints[start]
+      const endPoint = keypoints[end]
       
-      if (detection.type === 'object') {
-        // 绘制目标检测结果
-        canvasContext.strokeStyle = '#00FF00'  // 绿色
-        canvasContext.fillStyle = '#00FF00'
-        
-        // 绘制边框（使用缩放后的坐标）
-        canvasContext.strokeRect(scaledX1, scaledY1, scaledX2 - scaledX1, scaledY2 - scaledY1)
-        
-        // 绘制标签
-        const label = `${detection.class}: ${detection.confidence.toFixed(2)}`
-        canvasContext.fillText(label, scaledX1, scaledY1 - 5)
-        
-      } else if (detection.type === 'face') {
-        // 绘制人脸识别结果
-        const color = detection.name !== 'Unknown' ? '#00FF00' : '#FF0000'
-        canvasContext.strokeStyle = color
-        canvasContext.fillStyle = color
-        
-        // 绘制边框（使用缩放后的坐标）
-        canvasContext.strokeRect(scaledX1, scaledY1, scaledX2 - scaledX1, scaledY2 - scaledY1)
-        
-        // 绘制姓名标签
-        const label = detection.name
-        const textMetrics = canvasContext.measureText(label)
-        const textWidth = textMetrics.width
-        const textHeight = 20
-        
-        // 绘制标签背景（使用缩放后的坐标）
-        if (scaledY1 - textHeight < 5) {
-          canvasContext.fillRect(scaledX1, scaledY1, textWidth + 4, textHeight)
-          canvasContext.fillStyle = '#FFFFFF'
-          canvasContext.fillText(label, scaledX1 + 2, scaledY1 + textHeight - 5)
-        } else {
-          canvasContext.fillRect(scaledX1, scaledY1 - textHeight, textWidth + 4, textHeight)
-          canvasContext.fillStyle = '#FFFFFF'
-          canvasContext.fillText(label, scaledX1 + 2, scaledY1 - 5)
-        }
+      // 检查关键点是否可见（置信度 > 0.5）
+      if (startPoint[2] > 0.5 && endPoint[2] > 0.5) {
+        canvasContext.beginPath()
+        canvasContext.moveTo(startPoint[0], startPoint[1])
+        canvasContext.lineTo(endPoint[0], endPoint[1])
+        canvasContext.stroke()
       }
-    })
-    
-  } catch (error) {
-    console.error('绘制检测结果错误:', error)
-  }
+    }
+  })
+  
+  // 绘制关键点
+  canvasContext.fillStyle = '#4ecdc4'
+  keypoints.forEach((point, index) => {
+    if (point[2] > 0.5) {  // 置信度阈值
+      canvasContext.beginPath()
+      canvasContext.arc(point[0], point[1], 4, 0, 2 * Math.PI)
+      canvasContext.fill()
+    }
+  })
 }
 
 
