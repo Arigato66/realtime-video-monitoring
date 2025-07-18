@@ -26,18 +26,41 @@ class RTMPStreamManager:
             from app.services.dlib_service import dlib_face_service
             
             # 模型路径
-            BASE_PATH = os.path.join(os.path.dirname(__file__), '..', '..', '..')
+            BASE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
             MODEL_DIR = os.path.join(BASE_PATH, 'yolo-Weights')
             
+            print(f"模型目录: {MODEL_DIR}")
+            
+            # 加载模型
             self.models = {
-                'object': YOLO(os.path.join(MODEL_DIR, 'yolov8n.pt')),
-                'face': YOLO(os.path.join(MODEL_DIR, 'yolov8n-face-lindevs.pt'))
+                'object': None,
+                'face': None,
+                'pose': None
             }
+            
+            # 尝试加载目标检测模型
+            object_model_path = os.path.join(MODEL_DIR, "yolov8n.pt")
+            if os.path.exists(object_model_path):
+                self.models['object'] = YOLO(object_model_path)
+                print("✅ 目标检测模型加载成功")
+            else:
+                print(f"❌ 目标检测模型文件不存在: {object_model_path}")
+            
+            # 尝试加载人脸检测模型
+            face_model_path = os.path.join(MODEL_DIR, "yolov8n-face-lindevs.pt")
+            if os.path.exists(face_model_path):
+                self.models['face'] = YOLO(face_model_path)
+                print("✅ 人脸检测模型加载成功")
+            else:
+                print(f"❌ 人脸检测模型文件不存在: {face_model_path}")
+            
+            # 初始化Dlib服务
             self.dlib_service = dlib_face_service
             print("✅ RTMP AI模型加载成功")
+            
         except Exception as e:
             print(f"❌ RTMP AI模型加载失败: {e}")
-            self.models = {'object': None, 'face': None}
+            self.models = {'object': None, 'face': None, 'pose': None}
             self.dlib_service = None
     
     def add_stream(self, config: dict) -> str:
@@ -292,31 +315,76 @@ class RTMPStreamManager:
         try:
             # 目标检测
             if 'object_detection' in detection_modes and self.models['object'] is not None:
-                object_results = self.models['object'](frame)
+                object_results = self.models['object'].track(frame, persist=True)  # 使用track而不是predict
                 for result in object_results:
                     boxes = result.boxes
-                    if boxes is not None:
-                        for box in boxes:
+                    if boxes is not None and hasattr(boxes, 'id') and boxes.id is not None:
+                        # 处理有追踪ID的检测结果
+                        for i, box in enumerate(boxes):
                             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                             conf = box.conf[0].cpu().numpy()
                             cls = int(box.cls[0].cpu().numpy())
+                            track_id = int(boxes.id[i].cpu().numpy())
                             class_name = self.models['object'].names[cls]
                             
-                            # 检查是否在危险区域
-                            in_danger = self._is_in_danger_zone(x1, y1, x2, y2)
-                            
-                            results['detections'].append({
-                                'type': 'object',
-                                'class': class_name,
-                                'confidence': float(conf),
-                                'bbox': [int(x1), int(y1), int(x2), int(y2)],
-                                'in_danger_zone': in_danger
-                            })
-                            
-                            if in_danger:
-                                results['alerts'].append(f"检测到{class_name}进入危险区域")
+                            # 只处理人员检测（class 0）
+                            if cls == 0:  # person class
+                                # 计算目标的底部中心点
+                                foot_point = (int((x1 + x2) / 2), int(y2))
+                                
+                                # 检查是否在危险区域内
+                                in_danger_zone = self._is_in_danger_zone_advanced(foot_point)
+                                
+                                # 计算到危险区域的距离
+                                distance = self._calculate_distance_to_danger_zone(foot_point)
+                                
+                                # 确定告警状态
+                                alert_status = None
+                                color_status = 'green'  # 默认绿色
+                                
+                                if in_danger_zone:
+                                    # 更新停留时间
+                                    loitering_time = update_loitering_time(track_id, 0.2)  # 假设每次检测间隔0.2秒
+                                    
+                                    if loitering_time >= danger_zone_service.LOITERING_THRESHOLD:
+                                        color_status = 'red'
+                                        alert_status = f"人员 ID:{track_id} 在危险区域停留 {loitering_time:.1f} 秒"
+                                        results['alerts'].append(alert_status)
+                                        
+                                        # 添加告警
+                                        add_alert(alert_status,
+                                                 event_type="danger_zone_intrusion",
+                                                 details=f"人员在危险区域停留 {loitering_time:.1f} 秒")
+                                    else:
+                                        color_status = 'orange'
+                                else:
+                                    # 重置停留时间
+                                    reset_loitering_time(track_id)
+                                    
+                                    # 检查是否接近危险区域
+                                    if distance < danger_zone_service.SAFETY_DISTANCE:
+                                        color_status = 'yellow'
+                                        alert_status = f"人员 ID:{track_id} 过于接近危险区域，距离 {distance:.1f} 像素"
+                                        results['alerts'].append(alert_status)
+                                        
+                                        # 添加告警
+                                        add_alert(alert_status,
+                                                 event_type="proximity_warning",
+                                                 details=f"人员过于接近危险区域，距离 {distance:.1f} 像素")
+                                
+                                results['detections'].append({
+                                    'type': 'object',
+                                    'class': class_name,
+                                    'confidence': float(conf),
+                                    'bbox': [int(x1), int(y1), int(x2), int(y2)],
+                                    'track_id': track_id,
+                                    'in_danger_zone': in_danger_zone,
+                                    'distance_to_danger': distance,
+                                    'color_status': color_status,
+                                    'loitering_time': get_loitering_time(track_id) if in_danger_zone else 0
+                                })
             
-            # 人脸检测和识别
+            # 人脸检测和识别（保持原有逻辑）
             if 'face_only' in detection_modes and self.models['face'] is not None:
                 face_results = self.models['face'](frame)
                 
@@ -378,18 +446,59 @@ class RTMPStreamManager:
     def _draw_detection_results(self, frame, detection_results, detection_modes):
         """在帧上绘制检测结果"""
         try:
+            # 首先绘制危险区域
+            self._draw_danger_zone(frame)
+            
             for detection in detection_results['detections']:
                 bbox = detection['bbox']
                 x1, y1, x2, y2 = bbox
                 
-                if detection['type'] == 'object':
-                    # 绘制目标检测结果
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    label = f"{detection['class']}: {detection['confidence']:.2f}"
-                    cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                if detection['type'] == 'object' and 'color_status' in detection:
+                    # 根据状态设置颜色
+                    color_map = {
+                        'green': (0, 255, 0),
+                        'yellow': (0, 255, 255),
+                        'orange': (0, 165, 255),
+                        'red': (0, 0, 255)
+                    }
+                    color = color_map.get(detection['color_status'], (0, 255, 0))
                     
+                    # 根据危险程度调整边框粗细
+                    thickness = 2
+                    if detection['color_status'] == 'red':
+                        thickness = 4
+                    elif detection['color_status'] == 'orange':
+                        thickness = 3
+                    
+                    # 绘制边框
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+                    
+                    # 准备标签文本
+                    label = f"ID:{detection.get('track_id', 'N/A')} {detection['class']}"
+                    if detection['in_danger_zone']:
+                        label += f" 停留:{detection['loitering_time']:.1f}s"
+                    elif detection['distance_to_danger'] < danger_zone_service.SAFETY_DISTANCE:
+                        label += f" 距离:{detection['distance_to_danger']:.1f}px"
+                    
+                    # 绘制标签
+                    (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                    cv2.rectangle(frame, (x1, y1 - h - 10), (x1 + w, y1 - 5), color, -1)
+                    cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                    
+                    # 绘制底部中心点
+                    foot_point = (int((x1 + x2) / 2), int(y2))
+                    cv2.circle(frame, foot_point, 5, color, -1)
+                    
+                    # 如果接近但不在危险区域内，绘制连接线
+                    if not detection['in_danger_zone'] and detection['distance_to_danger'] < danger_zone_service.SAFETY_DISTANCE * 2:
+                        self._draw_distance_line(frame, foot_point, detection['distance_to_danger'])
+                    
+                    # 如果在危险区域且停留时间超过阈值，绘制警告标记
+                    if detection['in_danger_zone'] and detection['loitering_time'] >= danger_zone_service.LOITERING_THRESHOLD:
+                        self._draw_warning_triangle(frame, x1, y1, x2, y2)
+                
                 elif detection['type'] == 'face':
-                    # 绘制人脸识别结果
+                    # 绘制人脸识别结果（保持原有逻辑）
                     name = detection['name']
                     color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
                     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
@@ -409,15 +518,117 @@ class RTMPStreamManager:
         except Exception as e:
             print(f"绘制检测结果错误: {e}")
     
-    def _is_in_danger_zone(self, x1: float, y1: float, x2: float, y2: float) -> bool:
-        """检查边界框是否与危险区域重叠"""
+    def _draw_danger_zone(self, frame):
+        """绘制危险区域"""
         try:
-            # 计算边界框中心点
-            center_x = (x1 + x2) / 2
-            center_y = (y1 + y2) / 2
+            if len(danger_zone_service.DANGER_ZONE) > 0:
+                # 绘制危险区域多边形
+                danger_zone_pts = np.array(danger_zone_service.DANGER_ZONE, dtype=np.int32).reshape((-1, 1, 2))
+                
+                # 绘制半透明填充
+                overlay = frame.copy()
+                cv2.fillPoly(overlay, [danger_zone_pts], (0, 0, 255))  # 红色填充
+                cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
+                
+                # 绘制边界线
+                cv2.polylines(frame, [danger_zone_pts], True, (0, 0, 255), 3)
+                
+                # 添加危险区域标签
+                if len(danger_zone_service.DANGER_ZONE) > 0:
+                    label_pos = tuple(danger_zone_service.DANGER_ZONE[0].astype(int))
+                    cv2.putText(frame, "DANGER ZONE", label_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        except Exception as e:
+            print(f"绘制危险区域错误: {e}")
+    
+    def _draw_warning_triangle(self, frame, x1, y1, x2, y2):
+        """绘制警告三角形"""
+        try:
+            triangle_height = 20
+            triangle_base = 20
+            triangle_center_x = int((x1 + x2) / 2)
+            triangle_top_y = int(y1) - 25
             
-            # 简化实现：总是返回False，避免复杂的几何计算
+            triangle_pts = np.array([
+                [triangle_center_x - triangle_base//2, triangle_top_y + triangle_height],
+                [triangle_center_x + triangle_base//2, triangle_top_y + triangle_height],
+                [triangle_center_x, triangle_top_y]
+            ], np.int32)
+            
+            cv2.fillPoly(frame, [triangle_pts], (0, 0, 255))  # 红色填充
+            cv2.polylines(frame, [triangle_pts], True, (0, 0, 0), 1)  # 黑色边框
+            
+            # 在三角形中绘制感叹号
+            cv2.putText(frame, "!", 
+                        (triangle_center_x - 3, triangle_top_y + triangle_height - 5), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        except Exception as e:
+            print(f"绘制警告三角形错误: {e}")
+    
+    def _draw_distance_line(self, frame, foot_point, distance):
+        """绘制到危险区域的距离线"""
+        try:
+            # 找到危险区域上最近的点
+            min_dist = float('inf')
+            closest_point = None
+            
+            for i in range(len(danger_zone_service.DANGER_ZONE)):
+                p1 = danger_zone_service.DANGER_ZONE[i]
+                p2 = danger_zone_service.DANGER_ZONE[(i + 1) % len(danger_zone_service.DANGER_ZONE)]
+                
+                # 计算点到线段的最近点
+                line_vec = p2 - p1
+                line_len = np.linalg.norm(line_vec)
+                if line_len > 0:
+                    line_unitvec = line_vec / line_len
+                    
+                    proj_length = np.dot(np.array(foot_point) - p1, line_unitvec)
+                    proj_length = max(0, min(line_len, proj_length))
+                    
+                    closest_on_line = p1 + proj_length * line_unitvec
+                    dist = np.linalg.norm(np.array(foot_point) - closest_on_line)
+                    
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_point = closest_on_line.astype(int)
+            
+            if closest_point is not None:
+                # 绘制虚线
+                cv2.line(frame, foot_point, tuple(closest_point), (255, 255, 0), 2)
+                
+                # 在线的中点显示距离
+                mid_point = ((foot_point[0] + closest_point[0]) // 2, 
+                           (foot_point[1] + closest_point[1]) // 2)
+                cv2.putText(frame, f"{distance:.0f}px", mid_point, 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        except Exception as e:
+            print(f"绘制距离线错误: {e}")
+    
+    def _is_in_danger_zone_advanced(self, point):
+        """检查点是否在危险区域内（使用高级几何算法）"""
+        try:
+            if len(danger_zone_service.DANGER_ZONE) < 3:
+                return False
+            return point_in_polygon(point, danger_zone_service.DANGER_ZONE)
+        except Exception as e:
+            print(f"危险区域检测错误: {e}")
             return False
+    
+    def _calculate_distance_to_danger_zone(self, point):
+        """计算点到危险区域的最小距离"""
+        try:
+            if len(danger_zone_service.DANGER_ZONE) < 3:
+                return float('inf')
+            return distance_to_polygon(point, danger_zone_service.DANGER_ZONE)
+        except Exception as e:
+            print(f"距离计算错误: {e}")
+            return float('inf')
+    
+    def _is_in_danger_zone(self, x1: float, y1: float, x2: float, y2: float) -> bool:
+        """检查边界框是否与危险区域重叠（保持向后兼容）"""
+        try:
+            # 计算边界框底部中心点
+            foot_point = ((x1 + x2) / 2, y2)
+            return self._is_in_danger_zone_advanced(foot_point)
         except Exception:
             return False
 

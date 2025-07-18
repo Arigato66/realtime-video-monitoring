@@ -92,7 +92,7 @@
         </div>
       </div>
     </div>
-
+    
     <!-- 视频区域 -->
     <div class="video-container" :class="{ 'sidebar-visible': isSidebarOpen }">
       <div class="video-wrapper">
@@ -113,18 +113,6 @@
               </div>
             </div>
             
-            <div class="control-panel">
-              <h2>控制面板</h2>
-              
-              <!-- 视频源选择 -->
-              <div class="control-section">
-                <h3>视频源</h3>
-                <div class="button-group">
-                  <button @click="connectWebcam" 
-                          :class="{ active: activeSource === 'webcam' }" 
-                          :disabled="detectionMode === 'face_anti_spoofing'">开启摄像头</button>
-                  <button @click="disconnectWebcam" v-if="activeSource === 'webcam'" class="disconnect-button">关闭摄像头</button>
-                  <button @click="uploadVideoFile" :disabled="activeSource === 'webcam'">上传视频</button>
             <!-- 上传文件 (视频) -->
             <div v-else-if="activeSource === 'upload' && isVideoUrl(videoSource)" key="upload-video" class="video-frame">
               <video :src="videoSource" controls autoplay class="webcam-feed"></video>
@@ -173,39 +161,12 @@
                 <div class="button-group liveness-button-group">
                   <button 
                     @click="toggleFaceAntiSpoofing" 
-                    
                     :class="{ active: detectionMode === 'face_anti_spoofing', 'liveness-button': true }"
                     data-mode="face_anti_spoofing">
                     活体检测
                   </button>
                 </div>
               </div>
-               <!-- 在检测模式和危险区域设置之间插入 -->
-              <div class="control-section">
-                <div class="scream-status-bar">
-                  <span>尖叫声检测状态：{{ screamStatus }}</span>
-                  <button v-if="!screamDetecting" @click="startScreamDetection">开启尖叫声检测</button>
-                  <button v-else @click="stopScreamDetection">关闭尖叫声检测</button>
-                  <div class="scream-volume-bar">
-                    <div class="scream-volume-inner" :style="{width: (screamVolume*100).toFixed(0)+'%', background: screamVolume > 0.5 ? '#f44336' : screamVolume > 0.2 ? '#ffc107' : '#4caf50'}"></div>
-                  </div>
-                </div>
-              </div>
-              <!-- 危险区域编辑 -->
-              <div class="control-section">
-                <h3>危险区域设置</h3>
-                <div class="button-group">
-                  <button @click="toggleEditMode" :class="{ active: editMode }">
-                    {{ editMode ? '保存区域' : '编辑区域' }}
-                  </button>
-                  <button v-if="editMode" @click="cancelEdit">取消编辑</button>
-                </div>
-                <div v-if="editMode" class="edit-instructions">
-                  <p>点击并拖动区域点以调整位置</p>
-                  <p>右键点击删除点</p>
-                  <p>双击添加新点</p>
-                </div>
-
             </div>
           </transition>
         </div>
@@ -223,7 +184,7 @@
         </canvas>
       </div>
     </div>
-
+    
     <!-- 可滑动侧边栏控制面板 -->
     <aside class="control-sidebar" :class="{ 'sidebar-open': isSidebarOpen }">
       <div class="sidebar-header">
@@ -238,6 +199,19 @@
         </div>
       </div>
       <div class="sidebar-content">
+
+        <!-- 尖叫声检测 -->
+        <div class="control-section">
+            <div class="scream-status-bar">
+                <span>尖叫声检测状态：{{ screamStatus }}</span>
+                <button v-if="!screamDetecting" @click="startScreamDetection">开启</button>
+                <button v-else @click="stopScreamDetection">关闭</button>
+                <div class="scream-volume-bar">
+                <div class="scream-volume-inner" :style="{width: (screamVolume*100).toFixed(0)+'%', background: screamVolume > 0.5 ? '#f44336' : screamVolume > 0.2 ? '#ffc107' : '#4caf50'}"></div>
+                </div>
+            </div>
+        </div>
+
         <!-- 视频源控制 -->
         <div class="control-section">
           <div class="section-header">
@@ -599,11 +573,8 @@ const editMode = ref(false)
 const alerts = ref([])
 const safetyDistance = ref(100)
 const loiteringThreshold = ref(2.0)
-const detectionMode = ref('object_detection') // 新增：检测模式状态
 const originalDangerZone = ref(null)
-// const fileInput = ref(null) // No longer needed
 const faceFileInput = ref(null) // 用于人脸注册的文件输入
-const registeredUsers = ref([]) // 已注册用户列表
 const pollingIntervalId = ref(null) // 用于轮询的定时器ID
 const videoTaskId = ref(''); // 保存当前视频处理任务的ID
 const webcamImg = ref(null);
@@ -611,6 +582,34 @@ const screamStatus = ref('未开启');
 const screamDetecting = ref(false);
 let screamSocket = null;
 const screamVolume = ref(0);
+
+const detectionMode = ref('object_detection')
+const registeredUsers = ref([])
+const searchQuery = ref('')
+const displayImage = ref(null)
+
+// Canvas 和危险区域状态
+const interactionCanvas = ref(null)
+const dangerZone = ref([])
+const isDragging = ref(false)
+const draggingIndex = ref(-1)
+
+// RTMP相关状态
+const showRtmpConnectionModal = ref(false)
+const rtmpConfig = ref({
+  name: '',
+  rtmp_url: '',
+  description: '',
+  detection_modes: ['object_detection']
+})
+const rtmpStatus = ref('')
+const activeStreams = ref([])
+const currentRtmpStream = ref('')
+const rtmpSocket = ref(null)
+const currentDetections = ref([]) // For RTMP stream detections
+const searchRtmpQuery = ref('') // New: for RTMP stream search
+const rtmpListPollingIntervalId = ref(null) // New: for polling RTMP stream list
+
 
 function startScreamDetection() {
   if (screamSocket) return;
@@ -641,35 +640,7 @@ function startScreamDetection() {
     screamDetecting.value = false;
     screamSocket = null;
   });
-const detectionMode = ref('object_detection')
-const originalDangerZone = ref([])
-const registeredUsers = ref([])
-const pollingIntervalId = ref(null)
-const videoTaskId = ref('')
-const searchQuery = ref('')
-const displayImage = ref(null)
-
-// Canvas 和危险区域状态
-const interactionCanvas = ref(null)
-const dangerZone = ref([])
-const isDragging = ref(false)
-const draggingIndex = ref(-1)
-
-// RTMP相关状态
-const showRtmpConnectionModal = ref(false)
-const rtmpConfig = ref({
-  name: '',
-  rtmp_url: '',
-  description: '',
-  detection_modes: ['object_detection']
-})
-const rtmpStatus = ref('')
-const activeStreams = ref([])
-const currentRtmpStream = ref('')
-const rtmpSocket = ref(null)
-const currentDetections = ref([]) // For RTMP stream detections
-const searchRtmpQuery = ref('') // New: for RTMP stream search
-const rtmpListPollingIntervalId = ref(null) // New: for polling RTMP stream list
+}
 
 // Computed properties
 const statusIndicatorClass = computed(() => ({
@@ -764,7 +735,8 @@ const apiFetch = async (endpoint, options = {}) => {
       throw new Error(errorData.message || `服务器错误: ${response.status}`);
     }
     return await response.json();
-  } catch (error) {
+  } catch (error)
+{
     console.error(`API调用失败 ${endpoint}:`, error);
     alert(`操作失败: ${error.message}`);
     throw error;
@@ -806,9 +778,7 @@ const setDetectionMode = async (mode) => {
       return;
     }
   }
-  
 
-  if (detectionMode.value === mode) return
   try {
     const data = await apiFetch('/detection_mode', {
       method: 'POST',
@@ -833,11 +803,6 @@ const setDetectionMode = async (mode) => {
     }
 
     console.log(data.message);
-
-      'violence_detection': '暴力检测'
-    }
-    alert(`检测模式已切换为: ${modeNames[mode] || mode}`)
-    console.log(data.message)
   } catch (error) {
     // Error handled by apiFetch
   }
@@ -961,7 +926,7 @@ const registerFace = () => {
 }
 
 const startRegistrationCapture = async () => {
-  if (!registrationVideoEl.value) {
+    if (!registrationVideoEl.value) {
     console.error("注册视频元素尚未准备好。")
     registrationStatus.value = '错误：无法访问视频元素。'
     return
@@ -970,7 +935,7 @@ const startRegistrationCapture = async () => {
   try {
     localStream.value = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
     registrationVideoEl.value.srcObject = localStream.value
-  } catch(err) {
+    } catch(err) {
     console.error("无法访问摄像头:", err)
     registrationStatus.value = '错误：无法访问摄像头。'
     alert('无法访问摄像头，请检查权限。')
@@ -979,33 +944,33 @@ const startRegistrationCapture = async () => {
   }
 
   registrationSocket.value = io(`${SERVER_ROOT_URL}/dlib/register`)
-  
-  registrationSocket.value.on('connect', () => {
+
+    registrationSocket.value.on('connect', () => {
     console.log('已连接到注册 WebSocket')
     registrationStatus.value = '连接成功，正在开始...'
     registrationSocket.value.emit('start_registration', { name: registrationName.value })
   })
 
-  registrationSocket.value.on('status', (data) => {
+    registrationSocket.value.on('status', (data) => {
     console.log('注册状态:', data.message)
     registrationStatus.value = data.message
   })
 
-  registrationSocket.value.on('capture_result', (data) => {
-    if (data.status === 'success') {
+    registrationSocket.value.on('capture_result', (data) => {
+        if (data.status === 'success') {
       capturedFramesCount.value = data.count
       registrationStatus.value = `成功捕获 ${data.count} 帧`
-    } else {
+        } else {
       registrationStatus.value = `捕获失败: ${data.message}`
-    }
+        }
   })
 
-  registrationSocket.value.on('error', (data) => {
+    registrationSocket.value.on('error', (data) => {
     console.error('注册 WebSocket 错误:', data.message)
     registrationStatus.value = `错误: ${data.message}`
   })
 
-  registrationSocket.value.on('disconnect', () => {
+    registrationSocket.value.on('disconnect', () => {
     console.log('已从注册 WebSocket断开')
     registrationStatus.value = '连接已断开。'
   })
@@ -1042,7 +1007,7 @@ const closeRegistrationModal = (isUnmounting = false) => {
     registrationSocket.value.disconnect()
     registrationSocket.value = null
   }
-  
+
   if (!isUnmounting && wasWebcamActive.value) {
     connectWebcam()
     wasWebcamActive.value = false
@@ -1165,7 +1130,7 @@ const stopPolling = () => {
 const pollTaskStatus = async (taskId) => {
   try {
     const response = await fetch(`${API_BASE_URL}/video/task_status/${taskId}`)
-    
+
     if (response.status === 200) {
       stopPolling()
       const data = await response.json()
@@ -1208,7 +1173,7 @@ const drawCanvas = () => {
 
     ctx.beginPath()
     ctx.moveTo(dangerZone.value[0][0], dangerZone.value[0][1])
-    for (let i = 1; i < dangerZone.value.length; i++) {
+  for (let i = 1; i < dangerZone.value.length; i++) {
       ctx.lineTo(dangerZone.value[i][0], dangerZone.value[i][1])
     }
     ctx.closePath()
@@ -1220,7 +1185,7 @@ const drawCanvas = () => {
     ctx.stroke()
 
     ctx.fillStyle = '#FF0000'
-    dangerZone.value.forEach(point => {
+  dangerZone.value.forEach(point => {
       ctx.beginPath()
       ctx.arc(point[0], point[1], 8, 0, Math.PI * 2)
       ctx.fill()
@@ -1255,7 +1220,7 @@ const drawDetections = () => {
     } else if (detection.type === 'polygon' && detection.points) {
       ctx.strokeStyle = detection.color || '#FFFF00'; // Default yellow for polygons
       ctx.lineWidth = 2;
-      ctx.beginPath();
+    ctx.beginPath();
       ctx.moveTo(detection.points[0][0], detection.points[0][1]);
       for (let i = 1; i < detection.points.length; i++) {
         ctx.lineTo(detection.points[i][0], detection.points[i][1]);
@@ -1791,9 +1756,6 @@ onUnmounted(() => {
     screamSocket.disconnect();
     screamSocket = null;
   }
-
-  disconnectWebcam();
-  closeRegistrationModal(true);
   
   if (rtmpSocket.value) {
     rtmpSocket.value.disconnect()
@@ -3269,7 +3231,7 @@ onUnmounted(() => {
     width: 100%;
   }
 }
-scream-status-bar {
+.scream-status-bar {
   display: flex;
   align-items: center;
   gap: 1rem;
