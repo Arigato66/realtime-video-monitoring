@@ -12,7 +12,7 @@
         <span class="divider"></span>
         <button @click="goToPage('/monitor')" :class="{ active: currentPath === '/monitor' }">
           <el-icon><VideoCameraFilled /></el-icon>
-          <span>监控大屏</span>
+          <span>我的监控大屏</span>
         </button>
         <span class="divider"></span>
         <button @click="goToPage('/alert')" :class="{ active: currentPath === '/alert' }">
